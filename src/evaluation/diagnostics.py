@@ -27,6 +27,7 @@ from typing import Any, Type
 import pandas as pd
 
 from generator.indicators import INDICATOR_FUNCTIONS
+from generator.spec_recovery import recover_stringified_dsl_fields
 from strategy.base import Strategy
 from strategy.context import Bar
 
@@ -55,10 +56,9 @@ def _load_spec_for(strategy_class: Type[Strategy]) -> dict:
     The class name is the CamelCase form of `spec.name`; we glob by suffix.
 
     The generation file stores `raw_tool_input` — the model's pre-validation
-    output. Sonnet 4.6 routinely stringifies entry_long/entry_short/exit_long/
-    exit_short (the documented safety-net case). At validation time the
-    safety net json.loads them; we mirror that here so the diagnostic walks
-    plain dicts."""
+    output, which may contain stringified DSL fields. We route through
+    `recover_stringified_dsl_fields` (the canonical helper used by the spec
+    validator too) so the safety net + counter live in exactly one place."""
     snake = _camel_to_snake(strategy_class.__name__)
     candidates = sorted(_GENERATIONS_DIR.glob(f"*_{snake}.json"))
     if not candidates:
@@ -70,14 +70,11 @@ def _load_spec_for(strategy_class: Type[Strategy]) -> dict:
     spec = payload.get("raw_tool_input")
     if not isinstance(spec, dict):
         raise ValueError(f"generation file {candidates[-1]} missing raw_tool_input dict")
-    for fld in ("entry_long", "entry_short", "exit_long", "exit_short"):
-        v = spec.get(fld)
-        if isinstance(v, str):
-            try:
-                spec[fld] = json.loads(v)
-            except json.JSONDecodeError:
-                spec[fld] = None
-    return spec
+    return recover_stringified_dsl_fields(
+        spec,
+        model=payload.get("model", "unknown"),
+        archetype=payload.get("archetype"),
+    )
 
 
 # ── DSL evaluation ───────────────────────────────────────────────────────────

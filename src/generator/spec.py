@@ -11,51 +11,16 @@ for the Anthropic SDK tool-use call.
 
 from __future__ import annotations
 
-import json
 import logging
 import re
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .indicators import ALLOWED_INDICATORS, DAILY_ONLY_INDICATORS
+from .spec_recovery import recover_stringified_dsl_fields
 
 logger = logging.getLogger(__name__)
-
-_QUIRKS_PATH = Path(__file__).resolve().parents[2] / "results" / "generation_quirks.json"
-
-
-def _record_string_dsl_quirk(field_name: str, model: str, archetype: str) -> None:
-    """Persist a counter row when the safety-net validator parses a stringified
-    DSL field. Defensive: any I/O failure is swallowed — we never want quirk
-    logging to break validation itself."""
-    try:
-        now = datetime.now(timezone.utc).isoformat()
-        data: dict = {}
-        if _QUIRKS_PATH.exists():
-            data = json.loads(_QUIRKS_PATH.read_text())
-        rec = data.setdefault(
-            "string_dsl_field",
-            {
-                "total": 0,
-                "by_model": {},
-                "by_field": {},
-                "by_archetype": {},
-                "first_seen": now,
-                "last_seen": now,
-            },
-        )
-        rec["total"] += 1
-        rec["by_model"][model] = rec["by_model"].get(model, 0) + 1
-        rec["by_field"][field_name] = rec["by_field"].get(field_name, 0) + 1
-        rec["by_archetype"][archetype] = rec["by_archetype"].get(archetype, 0) + 1
-        rec["last_seen"] = now
-        _QUIRKS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _QUIRKS_PATH.write_text(json.dumps(data, indent=2))
-    except Exception as e:
-        logger.warning("failed to record quirk to %s: %s", _QUIRKS_PATH, e)
 
 ARCHETYPE_NAMES = (
     "mean_reversion",
@@ -233,36 +198,18 @@ class StrategySpec(_Base):
             raise ValueError(f"strategy name must be snake_case: {v!r}")
         return v
 
-    @field_validator(
-        "entry_long", "entry_short", "exit_long", "exit_short", mode="before"
-    )
+    @model_validator(mode="before")
     @classmethod
-    def _parse_stringified_dsl(cls, v: Any, info) -> Any:
-        # LOAD-BEARING (decision 2026-04-28): Sonnet 4.6 stringifies these fields
-        # ~3x per generation despite explicit prompt instructions about object format.
-        # The prompt fix was partial; this safety net handles the rest reliably.
-        #
-        # Decision: accept the model behavior, keep the safety net, log occurrences
-        # for tracking. Do NOT remove this branch unless:
-        #   1. Counter stays at 0 across many runs with current/future model versions, AND
-        #   2. We've decided to enforce strict tool validation server-side instead.
-        #
-        # See generation_quirks.json for ongoing tracking.
-        if not isinstance(v, str):
-            return v
-        try:
-            parsed = json.loads(v)
-        except json.JSONDecodeError:
-            return v  # let normal validation surface the real type error
+    def _recover_stringified_dsl(cls, values, info) -> Any:
+        # LOAD-BEARING (decision 2026-04-28): Sonnet 4.6 stringifies the
+        # entry_long/entry_short/exit_long/exit_short fields routinely. The
+        # actual recovery + counter logic lives in spec_recovery.py so the
+        # diagnostic and any future raw_tool_input consumer share the same
+        # safety net. Do NOT inline the recovery back here.
+        if not isinstance(values, dict):
+            return values
         ctx = info.context or {}
-        model = ctx.get("model", "unknown")
-        archetype = (info.data or {}).get("archetype", "unknown")
-        logger.warning(
-            "stringified DSL quirk auto-parsed: field=%s model=%s archetype=%s",
-            info.field_name, model, archetype,
-        )
-        _record_string_dsl_quirk(info.field_name, model, archetype)
-        return parsed
+        return recover_stringified_dsl_fields(values, model=ctx.get("model", "unknown"))
 
     @model_validator(mode="after")
     def _validate(self) -> "StrategySpec":

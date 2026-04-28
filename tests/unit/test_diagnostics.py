@@ -17,9 +17,12 @@ _load_spec_for and assert the result has them parsed back to dicts.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
+import pandas as pd
 import pytest
 
 from evaluation import diagnostics
@@ -120,3 +123,123 @@ def test_split_top_level_would_fail_on_string_without_safety_net():
     stringified = json.dumps({"op": "and", "args": []})
     with pytest.raises(TypeError, match="string indices must be integers"):
         diagnostics._split_top_level(stringified)  # type: ignore[arg-type]
+
+
+# ── Session-aware diagnostic regression tests (Fix #5) ───────────────────────
+
+
+_ET = ZoneInfo("America/New_York")
+
+
+def _synthesize_5m_bars(n_sessions: int) -> pd.DataFrame:
+    """78 RTH 5-min bars (09:30..15:55) per session, n_sessions consecutive
+    weekdays starting Mon 2024-01-08 (chosen to dodge holidays). Prices
+    deterministic so indicator math is stable across CI runs."""
+    rows = []
+    day = datetime(2024, 1, 8, tzinfo=_ET)  # Monday
+    for s in range(n_sessions):
+        ts = day.replace(hour=9, minute=30)
+        for b in range(78):
+            price = 100.0 + s * 1.0 + b * 0.05
+            rows.append({
+                "timestamp": ts,
+                "open": price, "high": price + 0.1, "low": price - 0.1,
+                "close": price + 0.05, "volume": 1000.0,
+            })
+            ts += timedelta(minutes=5)
+        day += timedelta(days=1)
+    return pd.DataFrame(rows)
+
+
+def _spec_with_period(snake_name: str, period: int) -> dict:
+    """Spec with a single SMA indicator at the given period; long entry =
+    close > sma. Hits the warm-up code path without needing the DSL walker
+    to do anything fancy."""
+    return {
+        "name": snake_name,
+        "archetype": "mean_reversion",
+        "thesis": f"Test fixture spec with sma period={period} for warm-up regression test.",
+        "supported_assets": ["stocks"],
+        "timeframes": ["1d"] if period > 78 else ["5m"],
+        "parameters": [],
+        "indicators": [{"name": "sma_x", "type": "sma", "params": {"period": period}}],
+        "entry_long": {
+            "op": "compare", "operator": ">",
+            "lhs": {"op": "price", "field": "close"},
+            "rhs": {"op": "indicator", "name": "sma_x"},
+        },
+        "entry_short": None, "exit_long": None, "exit_short": None,
+    }
+
+
+class DailyOnIntradaySma100(Strategy):
+    archetype = "mean_reversion"
+    thesis = "Daily strategy with sma_100 — fails to warm on intraday bars."
+    supported_assets = ["stocks"]
+    timeframes = ["1d"]
+
+    def on_bar(self, bar, position, context):  # pragma: no cover
+        return []
+
+    def get_parameters(self):  # pragma: no cover
+        return {}
+
+
+class IntradaySma20(Strategy):
+    archetype = "mean_reversion"
+    thesis = "Intraday strategy with sma_20 — warms within each session."
+    supported_assets = ["stocks"]
+    timeframes = ["5m"]
+
+    def on_bar(self, bar, position, context):  # pragma: no cover
+        return []
+
+    def get_parameters(self):  # pragma: no cover
+        return {}
+
+
+def test_diagnostic_session_reset_daily_indicator_on_intraday_data(tmp_path):
+    """The smoking-gun test for Fix #5. A strategy with sma period=100 on
+    5-minute data: each RTH session has only 78 bars, so sma_100 cannot warm
+    up. With session-aware reset, warm_ratio must be 0.0. Without it,
+    the diagnostic would (incorrectly) report ~85% warm bars after the
+    first 100 bars of the continuous series."""
+    bars_df = _synthesize_5m_bars(n_sessions=3)  # 234 bars total
+    gen_dir = tmp_path / "generations"
+    gen_dir.mkdir()
+    _write_generation_file(gen_dir, "daily_on_intraday_sma100", _spec_with_period("daily_on_intraday_sma100", 100))
+
+    with patch.object(diagnostics, "_GENERATIONS_DIR", gen_dir), \
+         patch.object(diagnostics, "train_test_load", return_value=bars_df):
+        result = diagnostics.diagnose_signal_frequency(DailyOnIntradaySma100, "AMD")
+
+    assert result["n_bars"] == 234
+    assert result["bars_with_warm_indicators"] == 0, (
+        f"sma_100 on 78-bar sessions should NEVER warm up; got {result['bars_with_warm_indicators']}"
+    )
+    assert result["warm_ratio"] == 0.0
+    assert result["sides"]["long"]["full_hits"] == 0
+
+
+def test_diagnostic_session_reset_intraday_indicator_warms_in_session(tmp_path):
+    """Positive control: an intraday strategy with sma period=20 on 5-min
+    data should warm up after the 20th bar of each 78-bar session — so
+    warm bars per session ≈ 78 - 19 = 59, total over 3 sessions ≈ 177.
+    Catches the case where session-reset logic is too aggressive (e.g.,
+    if reset wiped session_bars after each bar)."""
+    bars_df = _synthesize_5m_bars(n_sessions=3)
+    gen_dir = tmp_path / "generations"
+    gen_dir.mkdir()
+    _write_generation_file(gen_dir, "intraday_sma20", _spec_with_period("intraday_sma20", 20))
+
+    with patch.object(diagnostics, "_GENERATIONS_DIR", gen_dir), \
+         patch.object(diagnostics, "train_test_load", return_value=bars_df):
+        result = diagnostics.diagnose_signal_frequency(IntradaySma20, "AMD")
+
+    assert result["n_bars"] == 234
+    # 3 sessions × (78 - 19) = 177 warm bars (sma needs `period` bars before it can return).
+    assert result["bars_with_warm_indicators"] == 177, (
+        f"sma_20 should warm bar 20..78 in each of 3 sessions = 177; "
+        f"got {result['bars_with_warm_indicators']}"
+    )
+    assert 0.7 < result["warm_ratio"] < 0.8

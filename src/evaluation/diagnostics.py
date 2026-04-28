@@ -26,6 +26,7 @@ from typing import Any, Type
 
 import pandas as pd
 
+from engine.session import RegularTradingHours, Session
 from generator.indicators import INDICATOR_FUNCTIONS
 from generator.spec_recovery import recover_stringified_dsl_fields
 from strategy.base import Strategy
@@ -186,16 +187,6 @@ def _slice_to_window(df: pd.DataFrame, start: datetime | date | None, end: datet
     return df.reset_index(drop=True)
 
 
-def _required_lookback(spec: dict) -> int:
-    candidates = [50]
-    for ind in spec.get("indicators", []):
-        for k in ("period", "slow", "lookback"):
-            v = ind.get("params", {}).get(k)
-            if isinstance(v, int) and v > 0:
-                candidates.append(v + 10)
-    return max(candidates)
-
-
 # ── Public API ───────────────────────────────────────────────────────────────
 
 
@@ -204,19 +195,31 @@ def diagnose_signal_frequency(
     symbol: str,
     start: datetime | date | None = None,
     end: datetime | date | None = None,
+    session: Session | None = None,
 ) -> dict:
     """Report per-sub-clause and full-condition entry hit counts.
 
-    Returns a dict with one entry per side ("long"/"short") that has a
-    non-null entry condition. Each side reports:
-      * `clauses`: human-readable rendering of each top-level sub-clause
-      * `clause_hits`: bars satisfying each sub-clause individually
-      * `full_hits`: bars satisfying the full entry condition
-      * `n_evaluable_bars`: bars where all indicators were warmed up
-      * `ratio_full_to_min_clause`: full_hits / min(clause_hits) — close to
-        1.0 means the AND adds little; close to 0 means clauses rarely
-        co-occur (this is the diagnostic we care about most).
+    The bar walk mirrors the backtester's session-reset behavior: the
+    indicator window resets at every session boundary (RegularTradingHours
+    by default). Indicators are computed on the same per-session window the
+    strategy actually sees in production, so a daily-period indicator on
+    intraday data correctly reports as "never warm" instead of warming up
+    after the first 100 bars of a 4-year continuous slice.
+
+    Returns a top-level dict with:
+      * `bars_with_warm_indicators`: count of bars where every declared
+        indicator returned a value within the current session's window
+      * `warm_ratio`: bars_with_warm_indicators / n_bars — quick read on
+        timeframe/session-length mismatch (a value of 0.0 with a non-zero
+        period indicator is the smoking gun of a daily-on-intraday issue)
+      * `sides`: one entry per side ("long"/"short") with non-null entry
+        condition. Each reports clauses, clause_hits, full_hits,
+        n_evaluable_bars (== bars_with_warm_indicators), and
+        ratio_full_to_min_clause (close to 1 = AND adds little; close to
+        0 = clauses rarely co-occur — the diagnostic we care about most).
     """
+    if session is None:
+        session = RegularTradingHours()
     spec = _load_spec_for(strategy_class)
     df = train_test_load(symbol)
     df = _slice_to_window(df, start, end)
@@ -225,9 +228,34 @@ def diagnose_signal_frequency(
     if not bars:
         return {"error": f"no bars for {symbol} in window [{start}, {end})"}
 
-    lookback = _required_lookback(spec)
     indicator_specs = spec.get("indicators", [])
     params = {p["name"]: p["default"] for p in spec.get("parameters", [])}
+
+    # Single pass: walk per-session, mirroring backtester's session_bars
+    # reset. Per bar, record whether all indicators warmed up within the
+    # current session's window, and cache their values for the side eval.
+    warm_per_bar: list[bool] = []
+    ind_values_per_bar: list[dict | None] = []
+    session_bars: list[Bar] = []
+    prev_ts: datetime | None = None
+    for bar in bars:
+        if session.is_session_start(bar.timestamp, prev_ts):
+            session_bars = []
+        session_bars.append(bar)
+        ind_values: dict[str, Any] = {}
+        ok = True
+        for ind in indicator_specs:
+            fn = INDICATOR_FUNCTIONS[ind["type"]]
+            v = fn(session_bars, **ind.get("params", {}))
+            if v is None:
+                ok = False
+                break
+            ind_values[ind["name"]] = v
+        warm_per_bar.append(ok)
+        ind_values_per_bar.append(ind_values if ok else None)
+        prev_ts = bar.timestamp
+
+    n_warm = sum(warm_per_bar)
 
     sides: dict[str, Any] = {}
     for side_key in ("entry_long", "entry_short"):
@@ -237,30 +265,19 @@ def diagnose_signal_frequency(
         sub_clauses = _split_top_level(entry)
         clause_hits = [0] * len(sub_clauses)
         full_hits = 0
-        evaluable = 0
 
-        for i in range(len(bars)):
-            recent = bars[max(0, i - lookback) : i + 1]
-            ind_values: dict[str, Any] = {}
-            ok = True
-            for ind in indicator_specs:
-                fn = INDICATOR_FUNCTIONS[ind["type"]]
-                v = fn(recent, **ind.get("params", {}))
-                if v is None:
-                    ok = False
-                    break
-                ind_values[ind["name"]] = v
-            if not ok:
+        for i, bar in enumerate(bars):
+            if not warm_per_bar[i]:
                 continue
-            evaluable += 1
+            ind_values = ind_values_per_bar[i]
             try:
-                if _eval_dsl(entry, ind_values, params, bars[i]):
+                if _eval_dsl(entry, ind_values, params, bar):
                     full_hits += 1
             except Exception as e:  # defensive — never break the diag
                 logger.debug("diag full-eval error on bar %d: %s", i, e)
             for j, clause in enumerate(sub_clauses):
                 try:
-                    if _eval_dsl(clause, ind_values, params, bars[i]):
+                    if _eval_dsl(clause, ind_values, params, bar):
                         clause_hits[j] += 1
                 except Exception as e:
                     logger.debug("diag clause-eval error clause=%d bar=%d: %s", j, i, e)
@@ -271,13 +288,14 @@ def diagnose_signal_frequency(
             "clauses": [_render_clause(c) for c in sub_clauses],
             "clause_hits": clause_hits,
             "full_hits": full_hits,
-            "n_evaluable_bars": evaluable,
+            "n_evaluable_bars": n_warm,
             "ratio_full_to_min_clause": ratio,
         }
 
     return {
         "symbol": symbol,
         "n_bars": len(bars),
-        "lookback": lookback,
+        "bars_with_warm_indicators": n_warm,
+        "warm_ratio": (n_warm / len(bars)) if bars else 0.0,
         "sides": sides,
     }

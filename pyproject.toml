@@ -1,0 +1,37 @@
+[project]
+name = "strategy-discovery"
+version = "0.1.0"
+description = "Strategy Discovery Framework — generate, evaluate, and track candidate trading strategies."
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=0.40",
+    "matplotlib>=3.8",
+    "pandas>=2.2",
+    "pyarrow>=15",
+    "python-dotenv>=1.0",
+    "pytz>=2024.1",
+    "requests>=2.32",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["data*", "engine*", "strategy*", "evaluation*", "generator*", "leaderboard*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "."]
+addopts = "-ra"
+
+[tool.coverage.run]
+source = ["src/engine", "src/strategy"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false

@@ -1,0 +1,14 @@
+venv/
+.env
+.env.*
+!.env.example
+__pycache__/
+*.pyc
+*.egg-info/
+.coverage
+.pytest_cache/
+.claude/
+data/
+db/
+results/
+strategies/generated/

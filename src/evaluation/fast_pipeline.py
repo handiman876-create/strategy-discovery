@@ -34,6 +34,9 @@ FAST_LABEL = "FAST: NON-CANONICAL"
 FAST_SYMBOLS = ["AMD", "NFLX", "SPY", "QQQ", "NVDA"]
 
 
+DIAGNOSE_BELOW_TRADES = 10  # if total OOS trades < this, run signal-frequency diag
+
+
 @dataclass
 class FastEvaluationResult:
     """Distinct type from EvaluationResult on purpose. Do not pass this to
@@ -50,6 +53,7 @@ class FastEvaluationResult:
     verdict: PromiseVerdict
     config: dict
     output_dir: Path | None = None
+    diagnostics: dict | None = None
 
 
 def run_fast_evaluation(
@@ -93,10 +97,30 @@ def run_fast_evaluation(
         config=canonical.config,
     )
 
+    if n_total < DIAGNOSE_BELOW_TRADES:
+        fast.diagnostics = _run_signal_frequency_diag(strategy_class, canonical.symbols)
+
     if output_root is not None:
         fast.output_dir = _write_fast_report(fast, output_root, canonical)
 
     return fast
+
+
+def _run_signal_frequency_diag(strategy_class: Type[Strategy], symbols: list[str]) -> dict:
+    """Per-symbol signal-frequency diagnostic. Errors are captured per symbol
+    so a single failure can't blank the whole report."""
+    from .diagnostics import diagnose_signal_frequency
+
+    out: dict = {
+        "reason": f"n_oos_trades_total < {DIAGNOSE_BELOW_TRADES}",
+        "per_symbol": {},
+    }
+    for sym in symbols:
+        try:
+            out["per_symbol"][sym] = diagnose_signal_frequency(strategy_class, sym)
+        except Exception as e:
+            out["per_symbol"][sym] = {"error": f"{type(e).__name__}: {e}"}
+    return out
 
 
 def _write_fast_report(
@@ -122,6 +146,7 @@ def _write_fast_report(
         "breakdown": asdict(fast.breakdown),
         "verdict": fast.verdict.to_dict(),
         "config": fast.config,
+        "diagnostics": fast.diagnostics,
     }
     import json
     (out_dir / "fast_summary.json").write_text(json.dumps(summary, indent=2, default=str))

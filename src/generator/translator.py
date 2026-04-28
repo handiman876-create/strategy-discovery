@@ -273,13 +273,19 @@ def _emit_class(spec: StrategySpec, class_name: str, thesis: str, lookback: int)
     L.append(f"{I*2}now = bar.timestamp")
     L.append(f"{I*2}tod_minutes = now.hour * 60 + now.minute")
 
-    # Indicator block
+    # Indicator block.
+    # We suffix the local variable name with "_val" so that an indicator alias
+    # equal to its imported function name (e.g. name="bb_upper", type="bb_upper")
+    # does not shadow the import. Python's scope analysis treats `bb_upper =`
+    # as a local declaration for the whole function, which would make the RHS
+    # reference to the imported `bb_upper` raise UnboundLocalError. The DSL
+    # operand emitter mirrors this suffix when generating `IndicatorRef`s.
     if spec.indicators:
         for ind in spec.indicators:
             kw = ", ".join(f"{k}={_py_lit(v)}" for k, v in ind.params.items())
             call = f"{ind.type}(bars{(', ' + kw) if kw else ''})"
-            L.append(f"{I*2}{ind.name} = {call}")
-        ind_list = ", ".join(i.name for i in spec.indicators)
+            L.append(f"{I*2}{ind.name}_val = {call}")
+        ind_list = ", ".join(f"{i.name}_val" for i in spec.indicators)
         L.append(f"{I*2}__ind_values = [{ind_list}]")
         L.append(f"{I*2}if any(v is None for v in __ind_values):")
         L.append(f"{I*3}return []")
@@ -336,16 +342,18 @@ def _emit_class(spec: StrategySpec, class_name: str, thesis: str, lookback: int)
 
 def _emit_indicator_block(spec: StrategySpec) -> str:
     """Emit one indicator-call line per declared indicator alias.
-    Collects the values into __ind_values so we can None-check uniformly."""
+    Collects the values into __ind_values so we can None-check uniformly.
+    Local variable names use a `_val` suffix to avoid shadowing the imported
+    indicator function when alias == type (see _emit_class)."""
     if not spec.indicators:
         return "__ind_values: list = []"
     lines: list[str] = []
     for ind in spec.indicators:
         kw = ", ".join(f"{k}={_py_lit(v)}" for k, v in ind.params.items())
         call = f"{ind.type}(bars{(', ' + kw) if kw else ''})"
-        lines.append(f"{ind.name} = {call}")
+        lines.append(f"{ind.name}_val = {call}")
     lines.append(
-        "__ind_values = [" + ", ".join(i.name for i in spec.indicators) + "]"
+        "__ind_values = [" + ", ".join(f"{i.name}_val" for i in spec.indicators) + "]"
     )
     return "\n".join(lines)
 
@@ -368,7 +376,9 @@ def _emit_expr(expr: BooleanExpression | Compare) -> str:
 
 def _emit_operand(node: Operand) -> str:
     if isinstance(node, IndicatorRef):
-        return node.name
+        # Mirrors the `_val` suffix added in the indicator-block emitter so DSL
+        # references resolve to the local variable, not the imported function.
+        return f"{node.name}_val"
     if isinstance(node, PriceRef):
         return {"open": "open_", "high": "high", "low": "low", "close": "close"}[node.field]
     if isinstance(node, TimeOfDay):

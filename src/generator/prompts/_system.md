@@ -27,6 +27,20 @@ Hard rules:
 - Generated strategies will be backtested on US stocks (intraday: 5m/15m, daily: 1d). Choose timeframes that suit the archetype.
 - Generate DIVERSE strategies. If "Already explored" entries are provided, your spec must materially differ — different indicators, different thresholds, different entry logic — not just renamed parameters.
 
+Entry frequency requirements:
+
+Strategies should fire often enough to produce 50+ trades per year per symbol on liquid US stocks at 5-minute resolution. Strategies that combine 3+ AND clauses on slow indicators (>20 day periods) often trigger too rarely to evaluate.
+
+Rough heuristic: each AND clause approximately halves the trigger rate. A 4-clause AND with each clause firing 30% of the time triggers ~0.8% of bars — too rare for evaluation.
+
+Counter-example (do NOT generate strategies like this):
+  entry_long: ROC(63) > 5 AND MACD_hist > 0 AND price > SMA(200) AND RSI(14) < 70
+
+Better:
+  entry_long: ROC(20) > 3 AND price > SMA(50)
+
+Soft cap (not enforced, just guidance): aim for 2-3 AND clauses in entry conditions, more allowed only if individual clauses fire frequently.
+
 The DSL boolean expressions are JSON-tree:
 - `{"op":"compare","operator":">|<|>=|<=|==|!=","lhs":<operand>,"rhs":<operand>}`
 - `{"op":"and","args":[<expr>,...]}`, `{"op":"or","args":[...]}`, `{"op":"not","arg":<expr>}`

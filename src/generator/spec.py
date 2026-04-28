@@ -238,11 +238,16 @@ class StrategySpec(_Base):
     )
     @classmethod
     def _parse_stringified_dsl(cls, v: Any, info) -> Any:
-        # Safety net: the anyOf[discriminated-oneOf, null] schema for these
-        # optional DSL fields can cause Claude to JSON-encode them as strings
-        # rather than nest them as objects. Detect, parse, count, continue.
-        # If this counter stays at 0 after the prompt fix, this branch is dead
-        # weight and can be removed. See docs/coding-conventions.md.
+        # LOAD-BEARING (decision 2026-04-28): Sonnet 4.6 stringifies these fields
+        # ~3x per generation despite explicit prompt instructions about object format.
+        # The prompt fix was partial; this safety net handles the rest reliably.
+        #
+        # Decision: accept the model behavior, keep the safety net, log occurrences
+        # for tracking. Do NOT remove this branch unless:
+        #   1. Counter stays at 0 across many runs with current/future model versions, AND
+        #   2. We've decided to enforce strict tool validation server-side instead.
+        #
+        # See generation_quirks.json for ongoing tracking.
         if not isinstance(v, str):
             return v
         try:

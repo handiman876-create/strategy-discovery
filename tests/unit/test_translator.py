@@ -96,3 +96,39 @@ def test_archetype_asset_compatibility_enforced():
     bad = StrategySpec(**spec_dict)
     with pytest.raises(TranslationError, match="disallows timeframes"):
         translate_to_file(bad, overwrite=True)
+
+
+def test_translate_indicator_alias_equal_to_type_does_not_shadow():
+    """Regression: when an indicator alias equals its imported function name
+    (e.g. name='bb_upper', type='bb_upper'), the translator must not emit
+    `bb_upper = bb_upper(bars, ...)` — that triggers UnboundLocalError because
+    Python treats the LHS as a local declaration for the entire function and
+    the RHS reference to the imported function fails."""
+    spec = StrategySpec(
+        name="bb_upper_collision_demo",
+        archetype="volatility_breakout",
+        thesis="Demo: alias collides with imported function — must not shadow.",
+        supported_assets=["stocks"],
+        timeframes=["1d"],
+        indicators=[
+            IndicatorSpec(name="bb_upper", type="bb_upper", params={"period": 20, "k": 2.0}),
+        ],
+        entry_long={
+            "op": "compare", "operator": ">",
+            "lhs": {"op": "price", "field": "close"},
+            "rhs": {"op": "indicator", "name": "bb_upper"},
+        },
+    )
+    path = translate_to_file(spec, overwrite=True)
+    cls = _import(spec.name, path)
+
+    from generator.fixture import fixture_1d
+    from engine.backtester import run_backtest
+
+    bars = fixture_1d()
+    cfg = BacktestConfig(starting_capital=10_000, slippage=0.01, session=RegularTradingHours())
+    # The on_bar path must execute without UnboundLocalError. The strategy
+    # may make 0 trades on this fixture; the regression is about scope, not
+    # signal frequency.
+    result = run_backtest("AMD", bars, cls(), cfg)
+    assert isinstance(result.trades, list)

@@ -19,13 +19,15 @@ from __future__ import annotations
 import inspect
 import json
 import logging
+import math
 import textwrap
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from .archetypes import ARCHETYPES, get_archetype
-from .indicators import ALLOWED_INDICATORS, INDICATOR_FUNCTIONS
+from .indicators import ALLOWED_INDICATORS, INDICATOR_FUNCTIONS, INDICATOR_RANGES
 from .spec import (
     And,
     BooleanExpression,
@@ -95,6 +97,210 @@ def _record_kwargs_quirk(indicator: str, extra: list[str], missing: list[str]) -
         logger.warning("failed to record kwargs quirk to %s: %s", _QUIRKS_PATH, e)
 
 
+# ── Unreachable-default detection (warn-only) ────────────────────────────────
+
+
+@dataclass(frozen=True)
+class UnreachableFinding:
+    """One Compare clause whose use of a parameter default makes it unsatisfiable
+    given the indicator's known range. Warn-only — never blocks translation."""
+
+    label: str  # which DSL field: "entry_long" / "entry_short" / "exit_long" / "exit_short"
+    indicator_alias: str
+    indicator_type: str
+    operator: str  # operator as it would apply with indicator on the LHS (post-flip)
+    param_name: str
+    param_default: float
+    indicator_range: tuple[float, float]
+    reason: str
+
+
+# Operator flip when LHS and RHS are swapped: `value OP indicator` becomes
+# `indicator FLIPPED_OP value`.
+_FLIPPED_OP: dict[str, str] = {
+    "<": ">",
+    "<=": ">=",
+    ">": "<",
+    ">=": "<=",
+    "==": "==",
+    "!=": "!=",
+}
+
+
+def _is_clause_unreachable(
+    op: str, ind_min: float, ind_max: float, value: float
+) -> bool:
+    """Return True iff `indicator OP value` is unsatisfiable given that the
+    indicator's value lies in [ind_min, ind_max]. `!=` is conservatively
+    treated as always satisfiable."""
+    if op == "<":
+        return ind_min >= value
+    if op == "<=":
+        return ind_min > value
+    if op == ">":
+        return ind_max <= value
+    if op == ">=":
+        return ind_max < value
+    if op == "==":
+        return value < ind_min or value > ind_max
+    return False
+
+
+def scan_unreachable_defaults(spec: StrategySpec) -> list[UnreachableFinding]:
+    """Pure-function scan: walk every Compare node in the spec's four DSL fields
+    and report clauses that compare a bounded indicator to a parameter's default
+    value, where the comparison is unsatisfiable. No I/O — designed so a future
+    second consumer (re-evaluator, contract test) can call this directly without
+    triggering quirk persistence."""
+    ind_alias_to_type: dict[str, str] = {i.name: i.type for i in spec.indicators}
+    param_defaults: dict[str, float] = {}
+    for p in spec.parameters:
+        if p.type == "bool":
+            continue  # bool defaults aren't comparable against numeric indicator ranges
+        param_defaults[p.name] = float(p.default)
+
+    findings: list[UnreachableFinding] = []
+    for label, expr in (
+        ("entry_long", spec.entry_long),
+        ("entry_short", spec.entry_short),
+        ("exit_long", spec.exit_long),
+        ("exit_short", spec.exit_short),
+    ):
+        if expr is None:
+            continue
+        _walk_for_unreachable(expr, label, ind_alias_to_type, param_defaults, findings)
+    return findings
+
+
+def _walk_for_unreachable(
+    node: Any,
+    label: str,
+    ind_alias_to_type: dict[str, str],
+    param_defaults: dict[str, float],
+    out: list[UnreachableFinding],
+) -> None:
+    if isinstance(node, Compare):
+        finding = _check_compare_unreachable(node, label, ind_alias_to_type, param_defaults)
+        if finding is not None:
+            out.append(finding)
+        return
+    if isinstance(node, (And, Or)):
+        for arg in node.args:
+            _walk_for_unreachable(arg, label, ind_alias_to_type, param_defaults, out)
+        return
+    if isinstance(node, Not):
+        # Conservative: don't try to invert findings under negation. A clause
+        # that's unreachable by itself becomes always-true under `not`, which
+        # is a different quirk and out of scope for this detector.
+        return
+
+
+def _check_compare_unreachable(
+    cmp: Compare,
+    label: str,
+    ind_alias_to_type: dict[str, str],
+    param_defaults: dict[str, float],
+) -> UnreachableFinding | None:
+    # Normalize to `indicator OP value` form: identify which side is the
+    # indicator and which is the parameter ref. If both/neither, skip.
+    lhs, rhs, op = cmp.lhs, cmp.rhs, cmp.operator
+    ind_ref: IndicatorRef | None = None
+    param_ref: ParamRef | None = None
+    flipped = False
+    if isinstance(lhs, IndicatorRef) and isinstance(rhs, ParamRef):
+        ind_ref, param_ref = lhs, rhs
+    elif isinstance(rhs, IndicatorRef) and isinstance(lhs, ParamRef):
+        ind_ref, param_ref = rhs, lhs
+        op = _FLIPPED_OP[op]
+        flipped = True
+    else:
+        return None
+
+    ind_type = ind_alias_to_type.get(ind_ref.name)
+    if ind_type is None:
+        return None  # spec validator catches undeclared aliases — defensive skip
+    ind_range = INDICATOR_RANGES.get(ind_type)
+    if ind_range is None:
+        return None  # unbounded indicator → no clause is unreachable on range alone
+
+    if param_ref.name not in param_defaults:
+        return None
+    value = param_defaults[param_ref.name]
+
+    ind_min, ind_max = ind_range
+    if not _is_clause_unreachable(op, ind_min, ind_max, value):
+        return None
+
+    direction = "LHS<->RHS swapped" if flipped else "LHS=indicator"
+    reason = (
+        f"{ind_type}({ind_ref.name}) {op} {value} is unsatisfiable: "
+        f"{ind_type} range is [{_fmt_bound(ind_min)}, {_fmt_bound(ind_max)}] "
+        f"(value comes from parameter {param_ref.name!r} default; {direction})"
+    )
+    return UnreachableFinding(
+        label=label,
+        indicator_alias=ind_ref.name,
+        indicator_type=ind_type,
+        operator=op,
+        param_name=param_ref.name,
+        param_default=value,
+        indicator_range=ind_range,
+        reason=reason,
+    )
+
+
+def _fmt_bound(x: float) -> str:
+    if x == math.inf:
+        return "inf"
+    if x == -math.inf:
+        return "-inf"
+    return repr(x)
+
+
+def _record_unreachable_quirk(strategy_name: str, findings: list[UnreachableFinding]) -> None:
+    """Persist a counter row for unreachable-default findings, mirroring the
+    bad_indicator_kwargs / string_dsl_field shape. Defensive: any I/O failure
+    is swallowed so quirk logging never blocks translation."""
+    if not findings:
+        return
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        data: dict = {}
+        if _QUIRKS_PATH.exists():
+            data = json.loads(_QUIRKS_PATH.read_text())
+        rec = data.setdefault(
+            "unreachable_default",
+            {
+                "total": 0,
+                "by_strategy": {},
+                "by_indicator": {},
+                "examples": [],
+                "first_seen": now,
+                "last_seen": now,
+            },
+        )
+        for f in findings:
+            rec["total"] += 1
+            rec["by_strategy"][strategy_name] = rec["by_strategy"].get(strategy_name, 0) + 1
+            rec["by_indicator"][f.indicator_type] = (
+                rec["by_indicator"].get(f.indicator_type, 0) + 1
+            )
+            if len(rec["examples"]) < 50:
+                example = {
+                    "strategy": strategy_name,
+                    **{k: v for k, v in asdict(f).items() if k != "reason"},
+                    "reason": f.reason,
+                }
+                # tuple → list for JSON
+                example["indicator_range"] = list(example["indicator_range"])
+                rec["examples"].append(example)
+        rec["last_seen"] = now
+        _QUIRKS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _QUIRKS_PATH.write_text(json.dumps(data, indent=2))
+    except Exception as e:
+        logger.warning("failed to record unreachable_default quirk to %s: %s", _QUIRKS_PATH, e)
+
+
 # ── Public API ───────────────────────────────────────────────────────────────
 
 
@@ -104,6 +310,11 @@ class TranslationError(ValueError):
 
 def translate_to_file(spec: StrategySpec, *, overwrite: bool = True) -> Path:
     validate_for_translation(spec)
+    findings = scan_unreachable_defaults(spec)
+    for f in findings:
+        logger.warning("unreachable-default clause in %s.%s: %s", spec.name, f.label, f.reason)
+    if findings:
+        _record_unreachable_quirk(spec.name, findings)
     code = _emit_code(spec)
     GENERATED_DIR.mkdir(parents=True, exist_ok=True)
     path = GENERATED_DIR / f"{spec.name}.py"

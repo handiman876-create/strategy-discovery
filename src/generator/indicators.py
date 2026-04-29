@@ -12,6 +12,7 @@ Naming convention: each indicator function is named the same as its DSL key.
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING, Optional, Sequence
 
 if TYPE_CHECKING:
@@ -36,6 +37,17 @@ ALLOWED_INDICATORS: tuple[str, ...] = (
 
 # Indicators that only make sense on daily-bar strategies.
 DAILY_ONLY_INDICATORS: frozenset[str] = frozenset({"daily_return"})
+
+# Closed-form ranges for indicators that are mathematically bounded. Used by
+# the translator's unreachable-default detector to flag clauses like
+# `rsi > 110` whose RHS lies outside the indicator's possible range. Indicators
+# absent from this map are treated as unbounded (-inf, inf). Bounds are
+# inclusive on the bounded side; use math.inf for the unbounded side.
+INDICATOR_RANGES: dict[str, tuple[float, float]] = {
+    "rsi": (0.0, 100.0),
+    "atr": (0.0, math.inf),
+    "percent_rank": (0.0, 1.0),
+}
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

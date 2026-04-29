@@ -1,0 +1,143 @@
+"""Plain dataclasses + Status enum + state machine constants.
+
+No ORM. Conversion between sqlite3.Row instances and dataclasses lives in
+record.py and query.py — keeping this module side-effect-free makes the
+state machine independently testable from the DB layer."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import Enum
+from typing import Optional
+
+
+class Status(str, Enum):
+    """The 9 strategy lifecycle states from the supplement's CHECK constraint.
+    The (str, Enum) hybrid lets `row["status"] == Status.GENERATED` compare
+    equal to the TEXT pulled out of SQLite, so callers don't need to wrap or
+    unwrap to compare."""
+
+    GENERATED = "generated"
+    FAST_EVALUATED = "fast_evaluated"
+    CANONICAL_EVALUATED = "canonical_evaluated"
+    HOLDOUT_EVALUATED = "holdout_evaluated"
+    PAPER_CANDIDATE = "paper_candidate"
+    PAPER_TRADING = "paper_trading"
+    PAPER_COMPLETE = "paper_complete"
+    REAL_MONEY_CANDIDATE = "real_money_candidate"
+    ARCHIVED = "archived"
+
+
+# Auto-transitions triggered by record_evaluation.
+#   eval_type → (target_status, set_of_predecessor_statuses_that_advance)
+# A 'fast' eval moves a `generated` strategy to `fast_evaluated`; a strategy
+# already past that point is left where it is (and the evaluation row is still
+# recorded). Same monotonic shape for 'canonical' and 'holdout'.
+EVAL_TYPE_AUTO_TRANSITIONS: dict[str, tuple[Status, frozenset[Status]]] = {
+    "fast": (Status.FAST_EVALUATED, frozenset({Status.GENERATED})),
+    "canonical": (
+        Status.CANONICAL_EVALUATED,
+        frozenset({Status.GENERATED, Status.FAST_EVALUATED}),
+    ),
+    "holdout": (
+        Status.HOLDOUT_EVALUATED,
+        frozenset(
+            {Status.GENERATED, Status.FAST_EVALUATED, Status.CANONICAL_EVALUATED}
+        ),
+    ),
+}
+
+
+# Manual transitions issued via the CLI (`promote` / `archive`). Each entry
+# is the legal next-state set from the keyed state. ARCHIVED is terminal
+# (empty next-set) and reachable from every non-archived state. The
+# PAPER_COMPLETE → REAL_MONEY_CANDIDATE step additionally requires
+# paper_outcome == 'pass' — that constraint lives in transition_status,
+# not in the matrix, because it depends on row data rather than on state
+# alone.
+LEGAL_MANUAL_TRANSITIONS: dict[Status, frozenset[Status]] = {
+    Status.GENERATED: frozenset({Status.ARCHIVED}),
+    Status.FAST_EVALUATED: frozenset({Status.ARCHIVED}),
+    Status.CANONICAL_EVALUATED: frozenset({Status.ARCHIVED}),
+    Status.HOLDOUT_EVALUATED: frozenset(
+        {Status.PAPER_CANDIDATE, Status.ARCHIVED}
+    ),
+    Status.PAPER_CANDIDATE: frozenset(
+        {Status.PAPER_TRADING, Status.ARCHIVED}
+    ),
+    Status.PAPER_TRADING: frozenset(
+        {Status.PAPER_COMPLETE, Status.ARCHIVED}
+    ),
+    Status.PAPER_COMPLETE: frozenset(
+        {Status.REAL_MONEY_CANDIDATE, Status.ARCHIVED}
+    ),
+    Status.REAL_MONEY_CANDIDATE: frozenset({Status.ARCHIVED}),
+    Status.ARCHIVED: frozenset(),
+}
+
+
+@dataclass
+class Strategy:
+    behavioral_hash: str
+    name: str
+    archetype: str
+    timeframe: str
+    spec_json: str
+    first_generated_at: str  # ISO-8601 string; SQLite TIMESTAMP is TEXT
+    last_seen_at: str
+    generation_count: int = 1
+    status: Status = Status.GENERATED
+    fast_evaluated_at: Optional[str] = None
+    canonical_evaluated_at: Optional[str] = None
+    holdout_evaluated_at: Optional[str] = None
+    paper_candidate_at: Optional[str] = None
+    paper_started_at: Optional[str] = None
+    paper_ended_at: Optional[str] = None
+    archived_at: Optional[str] = None
+    paper_outcome: Optional[str] = None  # 'pass' | 'fail' | 'inconclusive' | None
+    paper_notes: Optional[str] = None
+    archive_reason: Optional[str] = None
+    imported_from: Optional[str] = None  # 'backfill' or None
+
+
+@dataclass
+class Generation:
+    """One model-generation event. id is None until the row is inserted."""
+
+    id: Optional[int]
+    strategy_hash: str
+    generated_at: str
+    archetype: str
+    model_version: str
+    prompt_hash: str
+    requested_timeframe: Optional[str] = None
+    cost_usd: Optional[float] = None
+    retry_count: int = 0
+    duration_seconds: Optional[float] = None
+    stringification_firings: int = 0
+    kwarg_validator_firings: int = 0
+    unreachable_default_firings: int = 0
+    raw_response_path: Optional[str] = None
+    spec_path: Optional[str] = None
+    imported_from: Optional[str] = None
+
+
+@dataclass
+class Evaluation:
+    """One evaluation event of any tier. id is None until the row is inserted.
+    `promising` is bool here; record.py converts to/from the schema's
+    INTEGER CHECK (0|1)."""
+
+    id: Optional[int]
+    strategy_hash: str
+    eval_type: str  # 'fast' | 'canonical' | 'holdout'
+    evaluated_at: str
+    n_oos_trades: int
+    promising: bool
+    results_dir: str
+    config_json: str
+    duration_seconds: Optional[float] = None
+    median_pf: Optional[float] = None
+    score: Optional[float] = None
+    failed_gates: Optional[str] = None  # comma-separated condition names; encoded by record.py
+    imported_from: Optional[str] = None

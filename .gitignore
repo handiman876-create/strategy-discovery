@@ -8,7 +8,10 @@ __pycache__/
 .coverage
 .pytest_cache/
 .claude/
-data/
-db/
-results/
+# Top-level data/db/results trees only — anchored with a leading slash so
+# nested directories like src/data/ aren't silently swept up. Without the
+# anchor, src/data/*.py was untracked from the project's start.
+/data/
+/db/
+/results/
 strategies/generated/

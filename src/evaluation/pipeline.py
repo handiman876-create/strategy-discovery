@@ -141,11 +141,12 @@ def run_evaluation(
         )
 
     # Aggregate metrics for scoring.
+    n_oos_total = sum(s.n_oos_trades for s in per_symbol)
     pfs = [s.pf for s in per_symbol if s.n_oos_trades > 0]
     if not pfs:
         # No symbol produced any trades → trivially not promising.
         breakdown = ScoreBreakdown(0.0, 0.0, 0.0, 0.0, 0.0)
-        verdict = classify_promise(breakdown, ci_lower=0.0)
+        verdict = classify_promise(breakdown, ci_lower=0.0, n_oos_trades_total=n_oos_total)
         agg_p = 1.0
     else:
         # Significance: combine per-symbol p-values via Fisher's method
@@ -158,7 +159,9 @@ def run_evaluation(
         # Aggregate CI: median of per-symbol CI_lower values (conservative).
         ci_lows = [s.bootstrap.ci_lower for s in per_symbol if s.n_oos_trades > 0]
         ci_lower_agg = float(pd.Series(ci_lows).median()) if ci_lows else 0.0
-        verdict = classify_promise(breakdown, ci_lower=ci_lower_agg)
+        verdict = classify_promise(
+            breakdown, ci_lower=ci_lower_agg, n_oos_trades_total=n_oos_total
+        )
 
     cfg_dict = {
         "strategy": strategy_name,

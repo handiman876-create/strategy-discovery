@@ -296,6 +296,7 @@ A strategy is flagged as worth paper-trading if:
 - Robustness score > some threshold (TBD, calibrated as we generate strategies)
 - Median profit factor > 1.2 across the multi-symbol test
 - Bootstrap 5th percentile of profit factor > 1.0
+- **Total OOS trade count ≥ 30** across all symbols and walk-forward windows. Below 30 trades the score, CI, and median PF are dominated by sampling noise — a single lucky trade can satisfy every other condition (see `evaluation.scoring.MIN_TRADES_FOR_PROMISING`). This is a hard floor; §5.4 separately flags <100 trades as under-sampled.
 - Consistent edge across walk-forward windows
 - Drawdowns are tolerable (max DD < 25% of equity)
 

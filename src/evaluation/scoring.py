@@ -1,6 +1,6 @@
 """Robustness scoring + 'promising' classifier.
 
-Per DESIGN.md §5.5:
+Per DESIGN.md §5.5 / §5.6:
 
   robustness_score = median_pf_across_symbols
                    * consistency_factor (1 / (1 + std_dev_of_pf))
@@ -11,12 +11,20 @@ A strategy is "promising" iff ALL of:
   * score > 1.5
   * median_pf > 1.2
   * CI_lower (5th percentile of bootstrapped per-symbol PFs) > 1.0
+  * n_oos_trades_total >= MIN_TRADES_FOR_PROMISING (results below this
+    are statistically uninterpretable; see DESIGN.md §5.4)
 """
 
 from __future__ import annotations
 
 import statistics
 from dataclasses import asdict, dataclass
+
+# Minimum total OOS trades for a verdict to be statistically interpretable.
+# DESIGN.md §5.4 flags <100 trades as under-sampled; 30 is the floor below
+# which the score/CI are dominated by sampling noise. Configurable via the
+# `min_trades_threshold` kwarg on `classify_promise`.
+MIN_TRADES_FOR_PROMISING = 30
 
 
 @dataclass
@@ -79,9 +87,11 @@ def classify_promise(
     breakdown: ScoreBreakdown,
     ci_lower: float,
     *,
+    n_oos_trades_total: int,
     score_threshold: float = 1.5,
     median_pf_threshold: float = 1.2,
     ci_lower_threshold: float = 1.0,
+    min_trades_threshold: int = MIN_TRADES_FOR_PROMISING,
 ) -> PromiseVerdict:
     failed: list[FailedCondition] = []
 
@@ -110,6 +120,15 @@ def classify_promise(
                 required=f">{ci_lower_threshold}",
                 actual=ci_lower,
                 deficit=ci_lower_threshold - ci_lower,
+            )
+        )
+    if n_oos_trades_total < min_trades_threshold:
+        failed.append(
+            FailedCondition(
+                name="n_oos_trades_total",
+                required=f">={min_trades_threshold}",
+                actual=float(n_oos_trades_total),
+                deficit=float(min_trades_threshold - n_oos_trades_total),
             )
         )
 

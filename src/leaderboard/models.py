@@ -6,9 +6,16 @@ state machine independently testable from the DB layer."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
-from typing import Optional
+from typing import Any, Optional
+
+
+def _utcnow_iso() -> str:
+    """ISO-8601 UTC timestamp for default timestamp factories. Module-level
+    so tests and callers can monkeypatch a fixed clock if needed."""
+    return datetime.now(timezone.utc).isoformat()
 
 
 class Status(str, Enum):
@@ -139,5 +146,64 @@ class Evaluation:
     duration_seconds: Optional[float] = None
     median_pf: Optional[float] = None
     score: Optional[float] = None
-    failed_gates: Optional[str] = None  # comma-separated condition names; encoded by record.py
+    # JSON-encoded list of {"name", "required", "actual", "deficit"} dicts
+    # mirroring evaluation.scoring.FailedCondition. Encoded by record.py;
+    # query.py docstrings show example SQLite JSON1 patterns.
+    failed_gates: Optional[str] = None
     imported_from: Optional[str] = None
+
+
+# ── Inputs to record.py ──────────────────────────────────────────────────────
+
+
+@dataclass
+class GenerationMetadata:
+    """Inputs to record_generation that aren't derivable from the StrategySpec
+    or the behavioral hash. Field ordering follows Python's required-before-
+    defaults rule; semantic groupings are noted in comments."""
+
+    # Required — these come from the call site (claude_client / discover.py)
+    model_version: str
+    prompt_hash: str
+    archetype: str
+    cost_usd: float
+    retry_count: int
+    duration_seconds: float
+
+    # Quirk firing counters captured during this generation. Default 0 so
+    # the call site only has to pass them when they're nonzero.
+    stringification_firings: int = 0
+    kwarg_validator_firings: int = 0
+    unreachable_default_firings: int = 0
+
+    # Optional file refs; None when the generation didn't archive anything.
+    raw_response_path: Optional[str] = None
+    spec_path: Optional[str] = None
+
+    # Set when discover.py was invoked with --timeframe X. None means the
+    # model picked freely.
+    requested_timeframe: Optional[str] = None
+
+    # Defaults to UTC-now if the caller doesn't pin it. Integration hooks
+    # should pass the timestamp captured at generation start so the row
+    # matches archived artifacts.
+    generated_at: str = field(default_factory=_utcnow_iso)
+
+
+@dataclass
+class EvaluationResult:
+    """Inputs to record_evaluation alongside (strategy_hash, eval_type).
+
+    `failed_conditions` mirrors evaluation.scoring.FailedCondition; pass an
+    asdict-style list (keys: name, required, actual, deficit). record.py
+    JSON-encodes it into the schema's failed_gates TEXT column."""
+
+    n_oos_trades: int
+    promising: bool
+    results_dir: str
+    config_json: str
+    median_pf: Optional[float] = None
+    score: Optional[float] = None
+    duration_seconds: Optional[float] = None
+    failed_conditions: list[dict[str, Any]] = field(default_factory=list)
+    evaluated_at: str = field(default_factory=_utcnow_iso)

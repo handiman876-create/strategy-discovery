@@ -207,3 +207,30 @@ class EvaluationResult:
     duration_seconds: Optional[float] = None
     failed_conditions: list[dict[str, Any]] = field(default_factory=list)
     evaluated_at: str = field(default_factory=_utcnow_iso)
+
+
+# ── Outputs from query.py ────────────────────────────────────────────────────
+
+
+@dataclass
+class ArchetypeSummary:
+    """Aggregate metrics for one archetype, optionally filtered by timeframe
+    and a since-date. Returned by query.get_archetype_summary.
+
+    n_evaluations_by_type and n_promising_by_type always have the three keys
+    ('fast', 'canonical', 'holdout') present, even when zero. quirk_counts
+    always has the three quirk keys ('stringification', 'kwarg_validator',
+    'unreachable_default') present. by_status only includes statuses that
+    actually appear in scope — no zero-fill."""
+
+    archetype: str
+    timeframe: Optional[str]
+    since: Optional[str]
+    n_strategies: int
+    n_generations: int
+    n_evaluations_by_type: dict[str, int]
+    n_promising_by_type: dict[str, int]
+    by_status: dict[str, int]
+    median_score: Optional[float]
+    total_cost_usd: Optional[float]
+    quirk_counts: dict[str, int]

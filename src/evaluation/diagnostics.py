@@ -26,7 +26,7 @@ from typing import Any, Type
 
 import pandas as pd
 
-from engine.session import RegularTradingHours, Session
+from engine.session import RegularTradingHours, Session, should_reset_session_at_bar
 from generator.indicators import INDICATOR_FUNCTIONS
 from generator.spec_recovery import recover_stringified_dsl_fields
 from strategy.base import Strategy
@@ -244,7 +244,12 @@ def diagnose_signal_frequency(
     session_bars: list[Bar] = []
     prev_ts: datetime | None = None
     for bar in bars:
-        if session.is_session_start(bar.timestamp, prev_ts):
+        # Same dispatch as the backtester. For daily-or-coarser bars the
+        # helper returns False unconditionally, so session_bars accumulates
+        # across the whole series and daily-period indicators warm up.
+        # Without this gate the diagnostic over-reports cold (warm_ratio=0)
+        # for daily strategies even though the backtester ran them fine.
+        if should_reset_session_at_bar(target_tf, session, bar.timestamp, prev_ts):
             session_bars = []
         session_bars.append(bar)
         ind_values: dict[str, Any] = {}

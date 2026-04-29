@@ -30,10 +30,13 @@ from .execution import (
     apply_exit_slippage,
 )
 from .portfolio import Portfolio, Position
-from .session import RegularTradingHours, Session
-
-
-_INTRADAY_TIMEFRAMES = frozenset({"1m", "5m", "15m", "30m", "1h", "4h"})
+from .session import (
+    INTRADAY_TIMEFRAMES,
+    RegularTradingHours,
+    Session,
+    is_intraday_timeframe,
+    should_reset_session_at_bar,
+)
 
 
 @dataclass
@@ -59,7 +62,7 @@ class BacktestConfig:
 
     @property
     def is_intraday(self) -> bool:
-        return self.bar_timeframe in _INTRADAY_TIMEFRAMES
+        return is_intraday_timeframe(self.bar_timeframe)
 
 
 @dataclass
@@ -103,19 +106,22 @@ def run_backtest(
     for i, bar in enumerate(bars):
         # 1. Session boundary
         # Intraday: per-session reset, force-close at boundary, on_session_start hook.
-        # Daily-or-coarser: skip — the whole series is one continuous session.
+        # Daily-or-coarser: skip — the whole series is one continuous session;
         # on_session_start fires once at the very first bar so strategies that
         # need init-time setup still get the hook.
-        if is_intraday:
-            if config.session.is_session_start(bar.timestamp, prev_ts):
-                if portfolio.position is not None and last_bar is not None:
-                    _close(portfolio, last_bar.close, last_bar.timestamp, FillReason.EOD, fill_cfg)
-                    strategy.on_trade_closed(portfolio.trades[-1])
-                    pending_market = None
-                session_bars = []
-                ctx = _make_context(session_bars, config.context_lookback, config.session)
-                strategy.on_session_start(bar.timestamp, ctx)
-        elif prev_ts is None:
+        # The reset decision goes through the centralized helper so the
+        # signal-frequency diagnostic stays consistent with this code path.
+        if should_reset_session_at_bar(
+            config.bar_timeframe, config.session, bar.timestamp, prev_ts
+        ):
+            if portfolio.position is not None and last_bar is not None:
+                _close(portfolio, last_bar.close, last_bar.timestamp, FillReason.EOD, fill_cfg)
+                strategy.on_trade_closed(portfolio.trades[-1])
+                pending_market = None
+            session_bars = []
+            ctx = _make_context(session_bars, config.context_lookback, config.session)
+            strategy.on_session_start(bar.timestamp, ctx)
+        elif prev_ts is None and not is_intraday:
             ctx = _make_context(session_bars, config.context_lookback, config.session)
             strategy.on_session_start(bar.timestamp, ctx)
 

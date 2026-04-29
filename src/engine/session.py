@@ -1,4 +1,4 @@
-"""Session calendars.
+"""Session calendars + bar-timeframe-aware session-reset dispatch.
 
 A Session answers two questions for the engine:
   * "Should this bar be processed at all?" — `is_open(timestamp)`
@@ -7,6 +7,15 @@ A Session answers two questions for the engine:
 Two implementations:
   * `RegularTradingHours` — US stocks, 09:30–16:00 ET, weekdays excluding holidays.
   * `CryptoSession` — 24/7, no boundaries.
+
+Centralized dispatch helpers live at the bottom of this file:
+  * `INTRADAY_TIMEFRAMES` — single source of truth for the membership set.
+  * `is_intraday_timeframe(bar_timeframe)` — True for {"1m"…"4h"}.
+  * `should_reset_session_at_bar(bar_timeframe, session, current_ts, prev_ts)`
+    — the decision the backtester and signal-frequency diagnostic share.
+    Code outside this module must not call `Session.is_session_start` for
+    reset decisions; call this function instead. The contract is enforced
+    by tests/unit/test_session_reset_contract.py.
 """
 
 from __future__ import annotations
@@ -149,3 +158,51 @@ class CryptoSession(Session):
 
     def is_session_end_time(self, ts: datetime) -> bool:
         return False
+
+
+# ── Centralized session-reset dispatch ───────────────────────────────────────
+#
+# The backtester and the signal-frequency diagnostic both maintain a
+# session_bars list that resets at session boundaries — but only for
+# intraday data. For daily-or-coarser bars the whole series is one
+# continuous session so daily-period indicators can warm up. Keeping that
+# decision in two places drifts (Fix #5 shipped without the gate; the
+# diagnostic over-reported cold for daily strategies until this helper
+# landed). Single source of truth is the lesson — see
+# feedback_centralize_dispatched_logic in the project memory.
+
+
+INTRADAY_TIMEFRAMES: frozenset[str] = frozenset({"1m", "5m", "15m", "30m", "1h", "4h"})
+
+
+def is_intraday_timeframe(bar_timeframe: str) -> bool:
+    """Single source of truth for the intraday-vs-daily dispatch. Used
+    wherever code needs to know whether a timeframe operates within a
+    single trading session (intraday) or spans/equals one (daily+)."""
+    return bar_timeframe in INTRADAY_TIMEFRAMES
+
+
+def should_reset_session_at_bar(
+    bar_timeframe: str,
+    session: Session,
+    current_ts: datetime,
+    prev_ts: datetime | None,
+) -> bool:
+    """Decide whether session-scoped state (e.g. session_bars) should be
+    reset as we process this bar.
+
+    Returns True at every session boundary for intraday timeframes
+    (5m/15m/30m/1h/4h). Returns False for daily-or-coarser timeframes
+    unconditionally — the whole bar series is treated as one continuous
+    session so daily-period indicators can warm up across bars.
+
+    Code outside src/engine/session.py should not call
+    Session.is_session_start directly for reset decisions — call this
+    function instead. The contract is enforced by
+    tests/unit/test_session_reset_contract.py: any new direct caller
+    must either route through this helper or be added to the test's
+    explicit allowlist with a justification comment.
+    """
+    if not is_intraday_timeframe(bar_timeframe):
+        return False
+    return session.is_session_start(current_ts, prev_ts)

@@ -151,16 +151,19 @@ def _synthesize_5m_bars(n_sessions: int) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _spec_with_period(snake_name: str, period: int) -> dict:
+def _spec_with_period(snake_name: str, period: int, *, timeframe: str) -> dict:
     """Spec with a single SMA indicator at the given period; long entry =
     close > sma. Hits the warm-up code path without needing the DSL walker
-    to do anything fancy."""
+    to do anything fancy. `timeframe` is required (no default) — the
+    spec's timeframe must match the test's data shape, and forcing the
+    caller to be explicit prevents the implicit-coupling class of bug
+    that produced the original Fix #5 follow-up failure."""
     return {
         "name": snake_name,
         "archetype": "mean_reversion",
         "thesis": f"Test fixture spec with sma period={period} for warm-up regression test.",
         "supported_assets": ["stocks"],
-        "timeframes": ["1d"] if period > 78 else ["5m"],
+        "timeframes": [timeframe],
         "parameters": [],
         "indicators": [{"name": "sma_x", "type": "sma", "params": {"period": period}}],
         "entry_long": {
@@ -172,11 +175,11 @@ def _spec_with_period(snake_name: str, period: int) -> dict:
     }
 
 
-class DailyOnIntradaySma100(Strategy):
+class IntradayPeriod100Sma(Strategy):
     archetype = "mean_reversion"
-    thesis = "Daily strategy with sma_100 — fails to warm on intraday bars."
+    thesis = "Intraday strategy with sma_100 — period > session length, never warms."
     supported_assets = ["stocks"]
-    timeframes = ["1d"]
+    timeframes = ["5m"]
 
     def on_bar(self, bar, position, context):  # pragma: no cover
         return []
@@ -198,20 +201,36 @@ class IntradaySma20(Strategy):
         return {}
 
 
-def test_diagnostic_session_reset_daily_indicator_on_intraday_data(tmp_path):
-    """The smoking-gun test for Fix #5. A strategy with sma period=100 on
-    5-minute data: each RTH session has only 78 bars, so sma_100 cannot warm
-    up. With session-aware reset, warm_ratio must be 0.0. Without it,
-    the diagnostic would (incorrectly) report ~85% warm bars after the
-    first 100 bars of the continuous series."""
+class DailyPeriod100Sma(Strategy):
+    archetype = "mean_reversion"
+    thesis = "Daily strategy with sma_100 — warms across bars (no per-session reset)."
+    supported_assets = ["stocks"]
+    timeframes = ["1d"]
+
+    def on_bar(self, bar, position, context):  # pragma: no cover
+        return []
+
+    def get_parameters(self):  # pragma: no cover
+        return {}
+
+
+def test_intraday_strategy_with_oversized_period_never_warms_within_session(tmp_path):
+    """An intraday spec whose indicator period exceeds the RTH session
+    length (78 bars) cannot warm up: session_bars resets at every
+    session boundary, so a period=100 SMA never reaches its window
+    requirement. The diagnostic should report 0% warm — making the
+    failure mode loud rather than silently producing zero trades."""
     bars_df = _synthesize_5m_bars(n_sessions=3)  # 234 bars total
     gen_dir = tmp_path / "generations"
     gen_dir.mkdir()
-    _write_generation_file(gen_dir, "daily_on_intraday_sma100", _spec_with_period("daily_on_intraday_sma100", 100))
+    _write_generation_file(
+        gen_dir, "intraday_period100_sma",
+        _spec_with_period("intraday_period100_sma", period=100, timeframe="5m"),
+    )
 
     with patch.object(diagnostics, "_GENERATIONS_DIR", gen_dir), \
          patch.object(diagnostics, "train_test_load", return_value=bars_df):
-        result = diagnostics.diagnose_signal_frequency(DailyOnIntradaySma100, "AMD")
+        result = diagnostics.diagnose_signal_frequency(IntradayPeriod100Sma, "AMD")
 
     assert result["n_bars"] == 234
     assert result["bars_with_warm_indicators"] == 0, (
@@ -219,6 +238,46 @@ def test_diagnostic_session_reset_daily_indicator_on_intraday_data(tmp_path):
     )
     assert result["warm_ratio"] == 0.0
     assert result["sides"]["long"]["full_hits"] == 0
+
+
+def test_daily_strategy_warms_continuously_across_bars(tmp_path):
+    """This test pins the Fix #1 + helper centralization behavior:
+    daily-timeframe strategies receive daily-resampled bars from the
+    eval pipeline, and indicators warm up across bars without per-bar
+    session reset. Without the helper, the diagnostic would reset on
+    every bar (since each daily bar is a new date), reporting warm=0 —
+    the bug we fixed.
+
+    Synthesize 200 daily bars by resampling 200 sessions of 5m bars,
+    then run the diagnostic on a strategy declaring timeframes=['1d']
+    with sma period=100. Expected: sma_100 returns its first non-None
+    value at bar index 99 (0-indexed), so warm count = 200 - 100 + 1
+    = 101. If this assertion fails (especially with warm == 0), the
+    daily-bar reset gate inside should_reset_session_at_bar regressed
+    or the diagnostic stopped routing through it."""
+    from data.resample import resample
+    bars_5m = _synthesize_5m_bars(n_sessions=200)
+    bars_1d = resample(bars_5m, "1d")
+    assert len(bars_1d) == 200
+
+    gen_dir = tmp_path / "generations"
+    gen_dir.mkdir()
+    _write_generation_file(
+        gen_dir, "daily_period100_sma",
+        _spec_with_period("daily_period100_sma", period=100, timeframe="1d"),
+    )
+
+    with patch.object(diagnostics, "_GENERATIONS_DIR", gen_dir), \
+         patch.object(diagnostics, "train_test_load", return_value=bars_1d):
+        result = diagnostics.diagnose_signal_frequency(DailyPeriod100Sma, "AMD")
+
+    assert result["n_bars"] == 200
+    assert result["bars_with_warm_indicators"] == 101, (
+        f"sma_100 on 200 daily bars should warm at index 99..199 = 101; "
+        f"got {result['bars_with_warm_indicators']}. If 0, the daily-bar "
+        f"no-reset gate in should_reset_session_at_bar regressed."
+    )
+    assert result["warm_ratio"] > 0.5
 
 
 def test_diagnostic_session_reset_intraday_indicator_warms_in_session(tmp_path):
@@ -230,7 +289,10 @@ def test_diagnostic_session_reset_intraday_indicator_warms_in_session(tmp_path):
     bars_df = _synthesize_5m_bars(n_sessions=3)
     gen_dir = tmp_path / "generations"
     gen_dir.mkdir()
-    _write_generation_file(gen_dir, "intraday_sma20", _spec_with_period("intraday_sma20", 20))
+    _write_generation_file(
+        gen_dir, "intraday_sma20",
+        _spec_with_period("intraday_sma20", period=20, timeframe="5m"),
+    )
 
     with patch.object(diagnostics, "_GENERATIONS_DIR", gen_dir), \
          patch.object(diagnostics, "train_test_load", return_value=bars_df):

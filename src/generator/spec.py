@@ -213,6 +213,19 @@ class StrategySpec(_Base):
 
     @model_validator(mode="after")
     def _validate(self) -> "StrategySpec":
+        # Phase 3 supports a single declared timeframe per spec. Multi-timeframe
+        # support (one strategy subscribing to multiple bar streams) is deferred
+        # to Phase 4 — see the Fix #1 commit message for the architectural
+        # rationale. The eval pipeline also asserts this defensively at run
+        # time; this validator is the early-rejection layer that prevents the
+        # generator from emitting multi-timeframe specs in the first place.
+        if len(self.timeframes) != 1:
+            raise ValueError(
+                f"Phase 3 supports a single declared timeframe per spec; got "
+                f"timeframes={self.timeframes}. Multi-timeframe support is "
+                f"deferred to Phase 4."
+            )
+
         # At least one entry side must be defined.
         if self.entry_long is None and self.entry_short is None:
             raise ValueError("StrategySpec must define at least one of entry_long or entry_short")

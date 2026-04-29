@@ -61,6 +61,31 @@ def test_no_entry_signal_raises():
         StrategySpec(**_valid_spec_kwargs(entry_long=None, entry_short=None))
 
 
+def test_multi_timeframe_rejected_in_phase_3():
+    """Fix #2 — Phase 3 supports a single declared timeframe per spec.
+    Multi-timeframe support is deferred to Phase 4 (a strategy
+    subscribing to multiple bar streams needs engine-level dispatch
+    that doesn't exist yet). The validator catches this early so the
+    generator can never emit a multi-timeframe spec into the pipeline."""
+    with pytest.raises(ValueError, match="single declared timeframe"):
+        StrategySpec(**_valid_spec_kwargs(timeframes=["5m", "1d"]))
+
+
+def test_empty_timeframes_rejected():
+    """A spec with no timeframes is also invalid — len != 1. Pydantic's
+    min_length=1 on the field would catch this first, but the explicit
+    check in _validate makes the failure mode unambiguous if either
+    constraint is ever relaxed."""
+    with pytest.raises(ValueError):
+        StrategySpec(**_valid_spec_kwargs(timeframes=[]))
+
+
+def test_single_timeframe_accepted():
+    """Positive control: a single-timeframe spec passes validation."""
+    spec = StrategySpec(**_valid_spec_kwargs(timeframes=["1d"]))
+    assert spec.timeframes == ["1d"]
+
+
 def test_indicator_alias_uniqueness():
     with pytest.raises(ValueError, match="unique"):
         StrategySpec(

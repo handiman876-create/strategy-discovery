@@ -33,6 +33,9 @@ from .portfolio import Portfolio, Position
 from .session import RegularTradingHours, Session
 
 
+_INTRADAY_TIMEFRAMES = frozenset({"1m", "5m", "15m", "30m", "1h", "4h"})
+
+
 @dataclass
 class BacktestConfig:
     starting_capital: float = 10_000.0
@@ -41,6 +44,22 @@ class BacktestConfig:
     realistic_fills: bool = True
     session: Session = field(default_factory=RegularTradingHours)
     context_lookback: int = 200
+    # Bar timeframe drives session-handling. For intraday data (5m/15m/1h/...)
+    # session_bars resets at every session boundary and EOD force-close fires.
+    # For daily-or-coarser data, session_bars is never reset (treat the whole
+    # series as one continuous session so daily-period indicators can warm up)
+    # and EOD force-close is suppressed (no intra-bar EOD on daily bars).
+    # Default "5m" preserves prior behavior for tests that don't set it.
+    #
+    # This is the simple version: a single boolean dispatch on intraday vs
+    # daily-or-coarser. A future architectural improvement (Phase 4+) would
+    # be timeframe-aware session calendars with custom reset rules per
+    # timeframe — not needed for Phase 3.
+    bar_timeframe: str = "5m"
+
+    @property
+    def is_intraday(self) -> bool:
+        return self.bar_timeframe in _INTRADAY_TIMEFRAMES
 
 
 @dataclass
@@ -79,15 +98,24 @@ def run_backtest(
     session_bars: list[Bar] = []
     prev_ts: Optional[datetime] = None
     last_bar: Optional[Bar] = None
+    is_intraday = config.is_intraday
 
     for i, bar in enumerate(bars):
         # 1. Session boundary
-        if config.session.is_session_start(bar.timestamp, prev_ts):
-            if portfolio.position is not None and last_bar is not None:
-                _close(portfolio, last_bar.close, last_bar.timestamp, FillReason.EOD, fill_cfg)
-                strategy.on_trade_closed(portfolio.trades[-1])
-                pending_market = None
-            session_bars = []
+        # Intraday: per-session reset, force-close at boundary, on_session_start hook.
+        # Daily-or-coarser: skip — the whole series is one continuous session.
+        # on_session_start fires once at the very first bar so strategies that
+        # need init-time setup still get the hook.
+        if is_intraday:
+            if config.session.is_session_start(bar.timestamp, prev_ts):
+                if portfolio.position is not None and last_bar is not None:
+                    _close(portfolio, last_bar.close, last_bar.timestamp, FillReason.EOD, fill_cfg)
+                    strategy.on_trade_closed(portfolio.trades[-1])
+                    pending_market = None
+                session_bars = []
+                ctx = _make_context(session_bars, config.context_lookback, config.session)
+                strategy.on_session_start(bar.timestamp, ctx)
+        elif prev_ts is None:
             ctx = _make_context(session_bars, config.context_lookback, config.session)
             strategy.on_session_start(bar.timestamp, ctx)
 
@@ -100,8 +128,8 @@ def run_backtest(
         if portfolio.position is not None:
             _check_stop_target(portfolio, bar, fill_cfg, strategy)
 
-        # 4. EOD forced exit
-        if portfolio.position is not None and config.session.is_session_end_time(
+        # 4. EOD forced exit (intraday only — daily bars have no intra-bar EOD)
+        if is_intraday and portfolio.position is not None and config.session.is_session_end_time(
             bar.timestamp
         ):
             _close(portfolio, bar.close, bar.timestamp, FillReason.EOD, fill_cfg)

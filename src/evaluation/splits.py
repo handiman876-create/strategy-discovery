@@ -29,6 +29,14 @@ from typing import Iterator
 import pandas as pd
 
 from data.base import SCHEMA_COLUMNS, validate_schema
+from data.resample import resample as _resample_bars
+
+# Available timeframes per the spec's TIMEFRAMES literal. Source data is 5m,
+# everything else is resampled on load. If new finer timeframes are added
+# (e.g. "1m"), they'll need a separate data source — `_resolve_timeframe`
+# raises rather than silently returning the wrong-frequency 5m bars.
+_NATIVE_TIMEFRAME = "5m"
+_SERVABLE_TIMEFRAMES = frozenset({"5m", "15m", "30m", "1h", "4h", "1d"})
 
 _ROOT = Path(__file__).resolve().parents[2]
 TRAIN_TEST_ROOT = _ROOT / "data" / "polygon"
@@ -60,10 +68,20 @@ def is_in_optimization_mode() -> bool:
     return _OPT_MODE.get()
 
 
-def train_test_load(symbol: str, *, provider: str = "polygon") -> pd.DataFrame:
-    """Load the train+test slice (everything before HOLDOUT_BOUNDARY)."""
+def train_test_load(
+    symbol: str,
+    *,
+    provider: str = "polygon",
+    target_timeframe: str = _NATIVE_TIMEFRAME,
+) -> pd.DataFrame:
+    """Load the train+test slice (everything before HOLDOUT_BOUNDARY).
+
+    `target_timeframe` resamples 5m source data to a coarser bar size if
+    requested. Defaults to "5m" (no-op). Raises if the requested timeframe
+    is finer than the native data — we cannot synthesize sub-5m bars."""
     if provider != "polygon":
         raise ValueError(f"only polygon supported in Phase 2; got {provider!r}")
+    _resolve_timeframe(target_timeframe)
     path = TRAIN_TEST_ROOT / symbol.upper() / "5m.parquet"
     if not path.exists():
         raise FileNotFoundError(
@@ -75,6 +93,8 @@ def train_test_load(symbol: str, *, provider: str = "polygon") -> pd.DataFrame:
     boundary = pd.Timestamp(HOLDOUT_BOUNDARY, tz="America/New_York")
     df = df[df["timestamp"] < boundary].reset_index(drop=True)
     validate_schema(df)
+    if target_timeframe != _NATIVE_TIMEFRAME:
+        df = _resample_bars(df, target_timeframe)
     return df
 
 
@@ -83,6 +103,7 @@ def holdout_load(
     *,
     provider: str = "polygon",
     final_scoring: bool = False,
+    target_timeframe: str = _NATIVE_TIMEFRAME,
 ) -> pd.DataFrame:
     """Load the holdout slice. Refuses to return data:
       * while `optimization_mode()` is active, or
@@ -102,6 +123,7 @@ def holdout_load(
         )
     if provider != "polygon":
         raise ValueError(f"only polygon supported in Phase 2; got {provider!r}")
+    _resolve_timeframe(target_timeframe)
     path = HOLDOUT_ROOT / symbol.upper() / "5m.parquet"
     if not path.exists():
         raise FileNotFoundError(
@@ -113,6 +135,8 @@ def holdout_load(
     boundary = pd.Timestamp(HOLDOUT_BOUNDARY, tz="America/New_York")
     df = df[df["timestamp"] >= boundary].reset_index(drop=True)
     validate_schema(df)
+    if target_timeframe != _NATIVE_TIMEFRAME:
+        df = _resample_bars(df, target_timeframe)
     return df
 
 
@@ -122,6 +146,21 @@ def slice_window(df: pd.DataFrame, start: date, end_exclusive: date) -> pd.DataF
     s = pd.Timestamp(start, tz=tz)
     e = pd.Timestamp(end_exclusive, tz=tz)
     return df[(df["timestamp"] >= s) & (df["timestamp"] < e)].reset_index(drop=True)
+
+
+def _resolve_timeframe(target_timeframe: str) -> None:
+    """Per Additional ask C: keep this check as a stub even though every
+    entry in the spec's TIMEFRAMES literal is currently servable from 5m
+    via resampling. Future additions (e.g. "1m" or "tick") would not be
+    servable from 5m source data and must explicitly fail here rather
+    than silently returning the wrong-frequency native bars."""
+    if target_timeframe not in _SERVABLE_TIMEFRAMES:
+        raise ValueError(
+            f"timeframe {target_timeframe!r} is not servable from native 5m data. "
+            f"Servable timeframes: {sorted(_SERVABLE_TIMEFRAMES)}. "
+            f"To support a new timeframe, either add finer source data or "
+            f"extend _SERVABLE_TIMEFRAMES if the resampler can handle it."
+        )
 
 
 def _normalize(df: pd.DataFrame) -> pd.DataFrame:

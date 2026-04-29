@@ -221,7 +221,12 @@ def diagnose_signal_frequency(
     if session is None:
         session = RegularTradingHours()
     spec = _load_spec_for(strategy_class)
-    df = train_test_load(symbol)
+    # Load bars at the strategy's declared timeframe so the diagnostic walks
+    # the same series the backtester walks. Falls back to "5m" only if the
+    # class predates the timeframe declaration convention.
+    declared = list(getattr(strategy_class, "timeframes", None) or [])
+    target_tf = declared[0] if len(declared) == 1 else "5m"
+    df = train_test_load(symbol, target_timeframe=target_tf)
     df = _slice_to_window(df, start, end)
     bars = _df_to_bars(df)
 

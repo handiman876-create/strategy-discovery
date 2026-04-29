@@ -85,9 +85,29 @@ def run_evaluation(
     strategy_factory = strategy_factory or strategy_class
     strategy_name = strategy_class.__name__
 
+    # Derive the bar timeframe from the strategy's declared timeframes.
+    # Phase 3 requires single-timeframe strategies (Fix #2 enforces this in
+    # the spec validator); existing in-tree generated strategies pre-date
+    # that check, so we still defensively assert here.
+    declared = list(getattr(strategy_class, "timeframes", None) or [])
+    if len(declared) != 1:
+        raise ValueError(
+            f"{strategy_name}: Phase 3 supports a single declared timeframe per "
+            f"strategy; got timeframes={declared}. Multi-timeframe support is "
+            f"deferred to Phase 4."
+        )
+    bar_timeframe = declared[0]
+
+    # Stamp the resolved timeframe onto the per-symbol BacktestConfig used in
+    # this run so the backtester gates session-reset correctly. We don't
+    # mutate the caller's config; we replace bar_timeframe via dataclass repl.
+    from dataclasses import replace as _dc_replace
+
+    backtest_config = _dc_replace(backtest_config, bar_timeframe=bar_timeframe)
+
     per_symbol: list[SymbolEvaluation] = []
     for sym in symbols:
-        bars = train_test_load(sym)
+        bars = train_test_load(sym, target_timeframe=bar_timeframe)
         wf = walk_forward(sym, bars, strategy_factory, backtest_config, walk_config)
         oos_trades = wf.all_oos_trades
 

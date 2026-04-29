@@ -183,12 +183,22 @@ def main() -> int:
     else:
         bar_data = _load_alpaca_cache(symbols, start, end)
 
+    # Dispatch BacktestConfig.bar_timeframe on the strategy's declared
+    # timeframes so the backtester's session-reset gating matches what the
+    # strategy expects. Single-timeframe strategies (Casper, generated specs)
+    # take the declared value. Multi-timeframe strategies (BuyAndHold smoke
+    # test) keep the "5m" default since the manual CLI's data sources serve
+    # 5m natively and the strategy is timeframe-agnostic by design.
+    declared_tfs = list(getattr(_build_strategy(args), "timeframes", []) or [])
+    bar_tf = declared_tfs[0] if len(declared_tfs) == 1 else "5m"
+
     cfg = BacktestConfig(
         starting_capital=args.starting_capital,
         commission=args.commission,
         slippage=args.slippage,
         realistic_fills=args.realistic_fills,
         session=RegularTradingHours(),
+        bar_timeframe=bar_tf,
     )
 
     all_metrics = []

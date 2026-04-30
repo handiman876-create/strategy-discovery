@@ -32,9 +32,33 @@ from evaluation import (
     run_evaluation,
     run_fast_evaluation,
 )
-from generator.archetypes import all_archetype_names
+from generator.archetypes import all_archetype_names, get_archetype
 from generator.pipeline import generate_and_translate, generate_strategy
 from leaderboard.db import initialize_db
+
+
+def _check_timeframe_archetype_compat(
+    archetype: str, timeframe: str | None
+) -> str | None:
+    """Validate that the requested timeframe is supported by the archetype.
+    Returns None on a valid combo; returns a stderr-ready error message
+    when the combo is unsatisfiable.
+
+    Each archetype declares `allowed_timeframes` (`src/generator/archetypes.py`)
+    which is a subset of the spec validator's TIMEFRAMES. Without this CLI-
+    layer check, an unsatisfiable combo (e.g. mean_reversion + 5m) would
+    burn 3 API calls in a futile retry loop — the model could comply with
+    one constraint or the other, never both."""
+    if timeframe is None:
+        return None
+    arch = get_archetype(archetype)
+    if timeframe not in arch.allowed_timeframes:
+        return (
+            f"archetype {archetype!r} does not support timeframe "
+            f"{timeframe!r}. Allowed for {archetype}: "
+            f"{arch.allowed_timeframes}"
+        )
+    return None
 
 
 def main() -> int:
@@ -54,7 +78,21 @@ def main() -> int:
     parser.add_argument("--diversity-n", type=int, default=5)
     parser.add_argument("--max-retries", type=int, default=3)
     parser.add_argument("--no-dedup", action="store_true")
+    parser.add_argument(
+        "--timeframe",
+        default=None,
+        choices=["5m", "15m", "1h", "1d"],
+        help="Constrain the model to generate a strategy at this timeframe. "
+             "Choices match src/generator/spec.py TIMEFRAMES; 30m / 4h are "
+             "deferred (see docs/backlog.md). Up to 3 retries on noncompliance, "
+             "then the generation is skipped.",
+    )
     args = parser.parse_args()
+
+    err = _check_timeframe_archetype_compat(args.archetype, args.timeframe)
+    if err is not None:
+        print(f"Error: {err}", file=sys.stderr)
+        return 2
 
     load_dotenv(_ROOT / ".env", override=True)
 
@@ -72,6 +110,8 @@ def _run(args, conn) -> int:
     print(f"\n{'='*60}")
     print(f"  Archetype : {args.archetype}")
     print(f"  Mode      : {'DRY-RUN' if args.dry_run else 'GENERATE+TRANSLATE'}")
+    if args.timeframe is not None:
+        print(f"  Timeframe : {args.timeframe} (constrained; up to 3 retries on noncompliance)")
     if args.evaluate and not args.dry_run:
         print(f"  Evaluate  : {'FAST (NON-CANONICAL)' if args.fast else 'CANONICAL'}")
         if args.fast:
@@ -84,6 +124,7 @@ def _run(args, conn) -> int:
             args.archetype,
             diversity_n=args.diversity_n,
             max_retries=args.max_retries,
+            requested_timeframe=args.timeframe,
         )
         if result.spec is None:
             print(f"GENERATION FAILED: {result.failure_reason}")
@@ -111,6 +152,7 @@ def _run(args, conn) -> int:
         max_retries=args.max_retries,
         dedup=not args.no_dedup,
         conn=conn,
+        requested_timeframe=args.timeframe,
     )
     if result.spec is None:
         print(f"GENERATION FAILED: {result.failure_reason}")

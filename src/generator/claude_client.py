@@ -96,12 +96,21 @@ class ClaudeClient:
         diversity_context: list[dict] | None = None,
         retry_feedback: str | None = None,
         attempt: int = 1,
+        requested_timeframe: str | None = None,
     ) -> tuple[StrategySpec | None, GenerationLog]:
         """Run one generation attempt. Returns (spec, log). If the spec
-        cannot be parsed/validated, spec is None and log carries the error."""
+        cannot be parsed/validated, spec is None and log carries the error.
+
+        requested_timeframe: when set, a constraint sentence is appended
+        to the user message instructing the model to produce a strategy
+        at that timeframe. Compliance is verified by the caller (the
+        generator pipeline)."""
         arch = get_archetype(archetype)
         system_blocks, user_text = self._build_messages(
-            archetype, diversity_context=diversity_context, retry_feedback=retry_feedback
+            archetype,
+            diversity_context=diversity_context,
+            retry_feedback=retry_feedback,
+            requested_timeframe=requested_timeframe,
         )
         prompt_hash = _hash_prompt(system_blocks, user_text)
 
@@ -219,12 +228,13 @@ class ClaudeClient:
         *,
         diversity_context: list[dict] | None,
         retry_feedback: str | None,
+        requested_timeframe: str | None = None,
     ) -> tuple[list[dict], str]:
         """Assemble the system prompt blocks and user message.
 
         Stable content (system instructions, archetype prompt) is cached.
-        Volatile content (diversity context, retry feedback) goes in the
-        user message AFTER the cache breakpoint.
+        Volatile content (diversity context, retry feedback, timeframe
+        constraint) goes in the user message AFTER the cache breakpoint.
         """
         system_text = (PROMPTS_DIR / "_system.md").read_text()
         archetype_text = (PROMPTS_DIR / f"{archetype}.md").read_text()
@@ -244,6 +254,12 @@ class ClaudeClient:
             f"Generate a strategy spec for archetype `{archetype}`. "
             "Output ONLY by calling the `submit_strategy_spec` tool."
         ]
+        if requested_timeframe is not None:
+            parts.append(
+                f"\nGenerate a strategy that operates on {requested_timeframe} bars. "
+                f"The timeframes field of your spec MUST be ['{requested_timeframe}']. "
+                "Choose indicators and parameters appropriate for that timeframe."
+            )
         if diversity_context:
             parts.append("\nAlready explored — your spec must materially differ from these:")
             for entry in diversity_context:

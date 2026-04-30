@@ -102,3 +102,20 @@ def record_quirk(name: str, **breakdowns: str) -> None:
 **Migration:** all 4 call sites in one focused commit; remove the per-counter helpers + their `_QUIRKS_PATH` constants after. The four sites pass slightly different breakdowns today (`by_field`, `by_model`, `by_archetype`, `by_requested_timeframe`, etc.) — `**breakdowns` accommodates that without forcing a uniform schema.
 
 **Why deferred:** bundling the refactor into step 9 would have hidden it inside a feature commit. Centralizations deserve their own focused diffs (per `feedback_centralize_dispatched_logic` memory).
+
+## Pre-push housekeeping
+
+### Rewrite git author email across all commits
+
+**Current state:** every commit in `/root/strategy-discovery` and the memory repo at `/root/.claude/projects/-root/memory` bears author email `handiman876@gmail.com`. Going forward (post-Phase 4 step 9), new commits use the GitHub noreply alias `236492174+handiman876-create@users.noreply.github.com` via local git config.
+
+**Trigger:** before any push to a public host (GitHub or similar).
+
+**Procedure:**
+
+  * `git filter-repo --email-callback 'return new_email if old_email == b"handiman876@gmail.com" else old_email'`
+  * Or use `git rebase --root --exec 'git commit --amend --reset-author --no-edit'` if `filter-repo` isn't installed
+  * Apply to **both** repos (`strategy-discovery` and the memory repo)
+  * Verify: `git log --format='%ae' | sort -u` shows only the noreply alias
+
+**Why deferred:** rewriting now adds risk without current benefit (no exposure on private VPS). The right time is the moment before publishing, when the rewrite strategy can be comprehensive across all commits, not just in-session ones.

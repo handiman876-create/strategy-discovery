@@ -26,6 +26,7 @@ import pandas as pd
 from engine.backtester import BacktestConfig
 from strategy.base import Strategy
 
+from .leaderboard_hook import record_evaluation_to_leaderboard
 from .pipeline import run_evaluation
 from .scoring import PromiseVerdict, ScoreBreakdown
 from .walkforward import WalkForwardConfig
@@ -69,8 +70,8 @@ def run_fast_evaluation(
     baseline. Returns FastEvaluationResult.
 
     conn / strategy_hash: optional leaderboard-DB connection and the
-    strategy's behavioral hash. Phase 4 step 8b plumbing only — accepted
-    but not yet used. Step 8d calls record_evaluation when both are set.
+    strategy's behavioral hash. When both are set, the fast result is
+    recorded via record_evaluation(eval_type='fast') before returning.
     The inner run_evaluation call is intentionally NOT given conn — the
     fast path records exactly one row (eval_type='fast'), not two."""
     if walk_config is None:
@@ -110,6 +111,13 @@ def run_fast_evaluation(
 
     if output_root is not None:
         fast.output_dir = _write_fast_report(fast, output_root, canonical)
+
+    record_evaluation_to_leaderboard(
+        pipeline_result=fast,
+        conn=conn,
+        strategy_hash=strategy_hash,
+        eval_type="fast",
+    )
 
     return fast
 

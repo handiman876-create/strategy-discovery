@@ -23,6 +23,7 @@ from engine.backtester import BacktestConfig
 from engine.portfolio import Trade
 from strategy.base import Strategy
 
+from .leaderboard_hook import record_evaluation_to_leaderboard
 from .scoring import (
     PromiseVerdict,
     ScoreBreakdown,
@@ -86,8 +87,10 @@ def run_evaluation(
     """Run the full evaluation harness for a strategy across `symbols`.
 
     conn / strategy_hash: optional leaderboard-DB connection and the
-    strategy's behavioral hash. Phase 4 step 8b plumbing only — accepted
-    but not yet used. Step 8d calls record_evaluation when both are set."""
+    strategy's behavioral hash. When both are set, the result is recorded
+    via record_evaluation(eval_type='canonical') before returning.
+    Failures are logged at WARNING and swallowed — see
+    leaderboard_hook.record_evaluation_to_leaderboard for the policy."""
     strategy_factory = strategy_factory or strategy_class
     strategy_name = strategy_class.__name__
 
@@ -190,6 +193,13 @@ def run_evaluation(
 
     if output_root is not None:
         result.output_dir = _write_report(result, output_root)
+
+    record_evaluation_to_leaderboard(
+        pipeline_result=result,
+        conn=conn,
+        strategy_hash=strategy_hash,
+        eval_type="canonical",
+    )
 
     return result
 

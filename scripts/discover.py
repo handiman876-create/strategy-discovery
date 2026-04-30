@@ -34,6 +34,7 @@ from evaluation import (
 )
 from generator.archetypes import all_archetype_names
 from generator.pipeline import generate_and_translate, generate_strategy
+from leaderboard.db import initialize_db
 
 
 def main() -> int:
@@ -57,6 +58,17 @@ def main() -> int:
 
     load_dotenv(_ROOT / ".env", override=True)
 
+    # Phase 4 step 8b plumbing: open the leaderboard DB once at startup.
+    # Functions called below accept conn as a no-op kwarg for now; commits
+    # 8c (generator hook) and 8d (eval hooks) will use it to record rows.
+    conn = initialize_db()
+    try:
+        return _run(args, conn)
+    finally:
+        conn.close()
+
+
+def _run(args, conn) -> int:
     print(f"\n{'='*60}")
     print(f"  Archetype : {args.archetype}")
     print(f"  Mode      : {'DRY-RUN' if args.dry_run else 'GENERATE+TRANSLATE'}")
@@ -98,6 +110,7 @@ def main() -> int:
         diversity_n=args.diversity_n,
         max_retries=args.max_retries,
         dedup=not args.no_dedup,
+        conn=conn,
     )
     if result.spec is None:
         print(f"GENERATION FAILED: {result.failure_reason}")
@@ -140,6 +153,8 @@ def main() -> int:
             backtest_config=cfg,
             walk_config=wf,
             output_root=_ROOT / "results",
+            conn=conn,
+            strategy_hash=result.behavioral_hash,
         )
         print(f"\n[FAST EVAL — NON-CANONICAL]")
         print(f"  median_pf = {eval_result.median_pf:.3f}")
@@ -164,6 +179,8 @@ def main() -> int:
             backtest_config=cfg,
             walk_config=wf,
             output_root=_ROOT / "results",
+            conn=conn,
+            strategy_hash=result.behavioral_hash,
         )
         print(f"\n[CANONICAL EVAL]")
         print(f"  median_pf = {eval_result.breakdown.median_pf:.3f}")

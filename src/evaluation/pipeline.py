@@ -80,8 +80,14 @@ def run_evaluation(
     baseline_seed: int = 0,
     output_root: Path | None = None,
     strategy_factory: Callable[..., Strategy] | None = None,
+    conn: Any = None,
+    strategy_hash: str | None = None,
 ) -> EvaluationResult:
-    """Run the full evaluation harness for a strategy across `symbols`."""
+    """Run the full evaluation harness for a strategy across `symbols`.
+
+    conn / strategy_hash: optional leaderboard-DB connection and the
+    strategy's behavioral hash. Phase 4 step 8b plumbing only — accepted
+    but not yet used. Step 8d calls record_evaluation when both are set."""
     strategy_factory = strategy_factory or strategy_class
     strategy_name = strategy_class.__name__
 

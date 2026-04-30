@@ -122,6 +122,37 @@ def test_pipeline_retries_on_validation_failure(tmp_path, monkeypatch):
     assert "validation" in result.logs[0].error.lower()
 
 
+def test_generate_and_translate_accepts_conn_kwarg(tmp_path, monkeypatch):
+    """Step 8b plumbing: conn kwarg is accepted but unused. Step 8c will
+    wire the actual record_generation call. Passing a sentinel here
+    confirms the signature accepts it without changing behavior."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-mock")
+    tracker = SpendTracker(
+        cap_usd=10.0,
+        spend_file=tmp_path / "spend.json",
+        archive_file=tmp_path / "summary.json",
+    )
+    client = ClaudeClient(spend_tracker=tracker)
+    sentinel_conn = MagicMock(name="leaderboard_conn_sentinel")
+
+    with patch.object(
+        client.client.messages, "create",
+        return_value=_mock_message_response(_valid_spec_dict()),
+    ):
+        result = generate_and_translate(
+            "mean_reversion",
+            client=client,
+            dedup=False,
+            max_retries=1,
+            conn=sentinel_conn,
+        )
+
+    assert result.spec is not None
+    # Step 8b is plumbing only — conn must not be touched yet.
+    sentinel_conn.assert_not_called()
+    assert sentinel_conn.method_calls == []
+
+
 def test_pipeline_records_failed_calls_to_spend(tmp_path, monkeypatch):
     """If all retries fail, every attempt's spend is still recorded
     (over-record by design)."""

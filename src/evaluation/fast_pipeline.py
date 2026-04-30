@@ -62,9 +62,17 @@ def run_fast_evaluation(
     backtest_config: BacktestConfig,
     walk_config: WalkForwardConfig | None = None,
     output_root: Path | None = None,
+    conn: Any = None,
+    strategy_hash: str | None = None,
 ) -> FastEvaluationResult:
     """Fast/sanity evaluation. Always uses 5-symbol subset and small bootstrap/
-    baseline. Returns FastEvaluationResult."""
+    baseline. Returns FastEvaluationResult.
+
+    conn / strategy_hash: optional leaderboard-DB connection and the
+    strategy's behavioral hash. Phase 4 step 8b plumbing only — accepted
+    but not yet used. Step 8d calls record_evaluation when both are set.
+    The inner run_evaluation call is intentionally NOT given conn — the
+    fast path records exactly one row (eval_type='fast'), not two."""
     if walk_config is None:
         walk_config = WalkForwardConfig(
             train_window_months=24,

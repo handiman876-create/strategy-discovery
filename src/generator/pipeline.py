@@ -98,8 +98,13 @@ def generate_and_translate(
     diversity_n: int = DEFAULT_DIVERSITY_N,
     max_retries: int = DEFAULT_MAX_RETRIES,
     dedup: bool = True,
+    conn: Any = None,
 ) -> GenerateResult:
-    """Generate + translate. Adds behavioral-dedup retry on top of generate_strategy."""
+    """Generate + translate. Adds behavioral-dedup retry on top of generate_strategy.
+
+    conn: optional sqlite3.Connection to a leaderboard DB. Phase 4 step 8b
+    plumbing only — accepted but not yet used. Step 8c calls record_generation
+    on a successful generation when conn is set."""
     client = client or ClaudeClient()
     prior_hashes = _load_prior_behavioral_hashes(archetype) if dedup else set()
 

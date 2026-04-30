@@ -14,4 +14,9 @@ load_dotenv(_ROOT / ".env", override=True)
 
 ### Where `load_dotenv` belongs
 
-`src/` library code must NEVER call `load_dotenv()` directly — only top-level scripts load it. Library code reads from `os.environ.get()` and trusts the caller has loaded `.env` appropriately. This keeps the library testable and the dotenv loading path explicit.
+`src/` library code must NEVER call `load_dotenv()` directly — only top-level entry points load it. Library code reads from `os.environ.get()` and trusts the caller has loaded `.env` appropriately. This keeps the library testable and the dotenv loading path explicit.
+
+Recognized entry points (the only places `load_dotenv` may be called):
+
+  * `scripts/*.py` — at the top of `main()`, before any code that reads `os.environ`
+  * `tests/conftest.py` — at module import, so all tests see the same `.env` values that production scripts do. Without this, pytest invocations would pick up stale shell values and silently shadow `.env`. Discovered in Phase 4 step 11 when an integration test authenticated with a placeholder shell `ANTHROPIC_API_KEY` and failed with HTTP 401, despite the on-disk `.env` having a valid key.

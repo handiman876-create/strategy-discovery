@@ -26,7 +26,15 @@ include = ["data*", "engine*", "strategy*", "evaluation*", "generator*", "leader
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src", "."]
-addopts = "-ra"
+# Default-deselect the 'integration' marker so plain `pytest` skips tests
+# that hit external APIs (Anthropic) or run significant compute. The
+# alternative — silent-skip via runtime checks — risks accidentally
+# burning API on every test run if the gating logic regresses. Opt in
+# explicitly with `pytest -m integration`; run everything with `pytest -m ""`.
+addopts = "-ra -m 'not integration'"
+markers = [
+    "integration: tests that hit external APIs (Anthropic) or run significant compute. Default-deselected; opt in with `pytest -m integration`.",
+]
 
 [tool.coverage.run]
 source = ["src/engine", "src/strategy"]

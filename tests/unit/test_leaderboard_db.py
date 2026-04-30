@@ -36,16 +36,16 @@ def test_initialize_db_creates_expected_schema(tmp_path):
 
         # Row factory: queries return sqlite3.Row with dict-style access.
         conn.execute(
-            "INSERT INTO strategies (behavioral_hash, name, archetype, timeframe, "
+            "INSERT INTO strategies (strategy_hash, name, archetype, timeframe, "
             "spec_json, first_generated_at, last_seen_at) "
             "VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))",
             ("h1", "demo", "mean_reversion", "1d", "{}"),
         )
         row = conn.execute(
-            "SELECT behavioral_hash, name FROM strategies"
+            "SELECT strategy_hash, name FROM strategies"
         ).fetchone()
         assert isinstance(row, sqlite3.Row)
-        assert row["behavioral_hash"] == "h1"
+        assert row["strategy_hash"] == "h1"
         assert row["name"] == "demo"
     finally:
         conn.close()
@@ -56,7 +56,7 @@ def test_initialize_db_is_idempotent(tmp_path):
     conn1 = initialize_db(db)
     try:
         conn1.execute(
-            "INSERT INTO strategies (behavioral_hash, name, archetype, timeframe, "
+            "INSERT INTO strategies (strategy_hash, name, archetype, timeframe, "
             "spec_json, first_generated_at, last_seen_at) "
             "VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))",
             ("h1", "demo", "mean_reversion", "1d", "{}"),
@@ -74,9 +74,9 @@ def test_initialize_db_is_idempotent(tmp_path):
         assert versions_first  # not empty — at least one migration applied
 
         row = conn2.execute(
-            "SELECT behavioral_hash FROM strategies"
+            "SELECT strategy_hash FROM strategies"
         ).fetchone()
-        assert row["behavioral_hash"] == "h1"
+        assert row["strategy_hash"] == "h1"
     finally:
         conn2.close()
 

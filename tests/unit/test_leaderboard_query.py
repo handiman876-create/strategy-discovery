@@ -48,7 +48,7 @@ def _insert_strategy(
     last_seen_at: str = "2026-04-29T00:00:00",
 ):
     conn.execute(
-        "INSERT INTO strategies (behavioral_hash, name, archetype, timeframe, "
+        "INSERT INTO strategies (strategy_hash, name, archetype, timeframe, "
         "spec_json, first_generated_at, last_seen_at, status) "
         "VALUES (?, ?, ?, ?, '{}', ?, ?, ?)",
         (hash_, f"name_{hash_}", archetype, timeframe, first_generated_at,
@@ -104,7 +104,7 @@ def test_get_strategy_returns_dataclass(conn):
     _insert_strategy(conn, "h1", status=Status.FAST_EVALUATED)
     s = get_strategy(conn, "h1")
     assert isinstance(s, Strategy)
-    assert s.behavioral_hash == "h1"
+    assert s.strategy_hash == "h1"
     assert s.status is Status.FAST_EVALUATED  # converted from TEXT to enum
 
 
@@ -120,7 +120,7 @@ def test_list_strategies_default_order_is_last_seen_desc(conn):
     _insert_strategy(conn, "new", last_seen_at="2026-04-29T00:00:00")
     _insert_strategy(conn, "mid", last_seen_at="2026-03-01T00:00:00")
     rows = list_strategies(conn)
-    assert [s.behavioral_hash for s in rows] == ["new", "mid", "old"]
+    assert [s.strategy_hash for s in rows] == ["new", "mid", "old"]
 
 
 def test_list_strategies_filters_by_archetype_status_and_timeframe(conn):
@@ -136,7 +136,7 @@ def test_list_strategies_filters_by_archetype_status_and_timeframe(conn):
     only_mr_1d_gen = list_strategies(
         conn, archetype="mean_reversion", timeframe="1d", status=Status.GENERATED
     )
-    assert {s.behavioral_hash for s in only_mr_1d_gen} == {"a"}
+    assert {s.strategy_hash for s in only_mr_1d_gen} == {"a"}
 
 
 def test_list_strategies_rejects_unknown_order_by(conn):
@@ -329,7 +329,7 @@ def test_get_promising_candidates_returns_promising_only(conn):
     _insert_evaluation(conn, "good", "fast", promising=True, score=2.0)
     _insert_evaluation(conn, "bad", "fast", promising=False, score=10.0)
     rows = get_promising_candidates(conn, eval_type="fast")
-    assert [s.behavioral_hash for s in rows] == ["good"]
+    assert [s.strategy_hash for s in rows] == ["good"]
 
 
 def test_get_promising_candidates_orders_by_most_recent_score_desc(conn):
@@ -346,7 +346,7 @@ def test_get_promising_candidates_orders_by_most_recent_score_desc(conn):
     _insert_evaluation(conn, "b", "canonical", promising=True, score=5.0,
                        evaluated_at="2026-04-28T00:00:00")
     rows = get_promising_candidates(conn, eval_type="canonical")
-    assert [s.behavioral_hash for s in rows] == ["b", "a"]
+    assert [s.strategy_hash for s in rows] == ["b", "a"]
 
 
 def test_get_promising_candidates_filters_by_eval_type(conn):

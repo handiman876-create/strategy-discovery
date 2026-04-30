@@ -142,7 +142,7 @@ def test_generate_and_translate_records_to_leaderboard_when_conn_set(
     tmp_path, monkeypatch
 ):
     """Step 8c hook: with conn + dedup, a successful generation writes one
-    strategies row + one generations row. The behavioral_hash from the
+    strategies row + one generations row. The strategy_hash from the
     GenerateResult matches the strategies primary key in the DB."""
     from leaderboard.db import initialize_db
 
@@ -159,20 +159,20 @@ def test_generate_and_translate_records_to_leaderboard_when_conn_set(
         )
 
     assert result.spec is not None
-    assert result.behavioral_hash is not None
+    assert result.strategy_hash is not None
 
     rows = db_conn.execute(
-        "SELECT behavioral_hash, name, archetype FROM strategies"
+        "SELECT strategy_hash, name, archetype FROM strategies"
     ).fetchall()
     assert len(rows) == 1
-    assert rows[0]["behavioral_hash"] == result.behavioral_hash
+    assert rows[0]["strategy_hash"] == result.strategy_hash
     assert rows[0]["archetype"] == "mean_reversion"
 
     gens = db_conn.execute(
         "SELECT strategy_hash, archetype FROM generations"
     ).fetchall()
     assert len(gens) == 1
-    assert gens[0]["strategy_hash"] == result.behavioral_hash
+    assert gens[0]["strategy_hash"] == result.strategy_hash
     db_conn.close()
 
 
@@ -202,8 +202,8 @@ def test_generate_and_translate_no_write_when_conn_none(
 def test_generate_and_translate_no_write_when_dedup_false_logs_debug(
     tmp_path, monkeypatch, caplog
 ):
-    """dedup=False → behavioral_hash is None → leaderboard write is
-    skipped with a DEBUG log. Strategies are keyed by behavioral_hash so
+    """dedup=False → strategy_hash is None → leaderboard write is
+    skipped with a DEBUG log. Strategies are keyed by strategy_hash so
     we have nothing to insert without one."""
     from leaderboard.db import initialize_db
 
@@ -223,7 +223,7 @@ def test_generate_and_translate_no_write_when_dedup_false_logs_debug(
         )
 
     assert result.spec is not None
-    assert result.behavioral_hash is None
+    assert result.strategy_hash is None
     record_spy.assert_not_called()
     assert any(
         "skipping leaderboard write, dedup disabled" in r.message
@@ -259,7 +259,7 @@ def test_generate_and_translate_swallows_record_generation_exception(
         )
 
     assert result.spec is not None
-    assert result.behavioral_hash is not None
+    assert result.strategy_hash is not None
     assert any(
         "leaderboard write failed" in r.message and r.levelname == "WARNING"
         for r in caplog.records

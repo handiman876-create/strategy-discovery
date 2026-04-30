@@ -162,7 +162,7 @@ def _run(args, conn) -> int:
 
     print(f"✓ Spec       : {result.spec.name}")
     print(f"✓ Code       : {result.code_path}")
-    print(f"✓ Hash       : {result.behavioral_hash}")
+    print(f"✓ Hash       : {result.strategy_hash}")
     cost_total = sum(l.actual_cost_usd for l in result.logs)
     print(f"  Cost       : ${cost_total:.4f}  ({len(result.logs)} attempt(s))")
 
@@ -196,7 +196,7 @@ def _run(args, conn) -> int:
             walk_config=wf,
             output_root=_ROOT / "results",
             conn=conn,
-            strategy_hash=result.behavioral_hash,
+            strategy_hash=result.strategy_hash,
         )
         print(f"\n[FAST EVAL — NON-CANONICAL]")
         print(f"  median_pf = {eval_result.median_pf:.3f}")
@@ -222,7 +222,7 @@ def _run(args, conn) -> int:
             walk_config=wf,
             output_root=_ROOT / "results",
             conn=conn,
-            strategy_hash=result.behavioral_hash,
+            strategy_hash=result.strategy_hash,
         )
         print(f"\n[CANONICAL EVAL]")
         print(f"  median_pf = {eval_result.breakdown.median_pf:.3f}")

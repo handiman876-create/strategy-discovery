@@ -68,7 +68,7 @@ def test_legal_manual_transitions_cover_every_status():
 def test_dataclass_defaults_are_sensible():
     """Smoke test: default-construct each model with required fields only."""
     s = Strategy(
-        behavioral_hash="h1",
+        strategy_hash="h1",
         name="n",
         archetype="mean_reversion",
         timeframe="1d",

@@ -4,7 +4,7 @@
 Subcommands: list, show, promising, archetype, quirks, promote, archive.
 Global flags: --db PATH (default db/leaderboard.db), --json (machine-readable).
 
-Hash prefix matching: behavioral_hash is 64 chars; users provide a prefix of
+Hash prefix matching: strategy_hash is 64 chars; users provide a prefix of
 at least 6. Ambiguous prefixes list the matches and exit 1.
 
 User-facing errors raise CliError → printed to stderr + exit 1. Unknown
@@ -95,7 +95,7 @@ _RELATIVE_DATE_RE = re.compile(r"^(\d+)d$")
 
 
 def _resolve_hash_prefix(conn, prefix: str) -> str:
-    """Resolve a partial behavioral_hash to a full one. Raises CliError if
+    """Resolve a partial strategy_hash to a full one. Raises CliError if
     no match, ambiguous match, or prefix is shorter than the minimum."""
     if len(prefix) < _MIN_PREFIX_LEN:
         raise CliError(
@@ -103,9 +103,9 @@ def _resolve_hash_prefix(conn, prefix: str) -> str:
             f"got {len(prefix)}"
         )
     rows = conn.execute(
-        "SELECT behavioral_hash, name FROM strategies "
-        "WHERE behavioral_hash LIKE ? || '%' "
-        "ORDER BY behavioral_hash "
+        "SELECT strategy_hash, name FROM strategies "
+        "WHERE strategy_hash LIKE ? || '%' "
+        "ORDER BY strategy_hash "
         "LIMIT 11",
         (prefix,),
     ).fetchall()
@@ -113,14 +113,14 @@ def _resolve_hash_prefix(conn, prefix: str) -> str:
         raise CliError(f"no strategy matches prefix {prefix!r}")
     if len(rows) > 1:
         listing = "\n".join(
-            f"  {r['behavioral_hash'][:16]}  {r['name']}" for r in rows[:10]
+            f"  {r['strategy_hash'][:16]}  {r['name']}" for r in rows[:10]
         )
         more = f"\n  ... and more" if len(rows) > 10 else ""
         raise CliError(
             f"prefix {prefix!r} matches {len(rows)} strategies; be more specific:"
             f"\n{listing}{more}"
         )
-    return rows[0]["behavioral_hash"]
+    return rows[0]["strategy_hash"]
 
 
 def _parse_since(value: str) -> str:
@@ -184,7 +184,7 @@ def cmd_list(args) -> int:
     headers = ["hash", "name", "archetype", "tf", "status", "gens", "last_seen"]
     table = [
         [
-            s.behavioral_hash[:8],
+            s.strategy_hash[:8],
             s.name,
             s.archetype,
             s.timeframe,
@@ -218,7 +218,7 @@ def cmd_show(args) -> int:
         )
         return 0
 
-    print(f"behavioral_hash:  {strategy.behavioral_hash}")
+    print(f"strategy_hash:  {strategy.strategy_hash}")
     print(f"name:             {strategy.name}")
     print(f"archetype:        {strategy.archetype}")
     print(f"timeframe:        {strategy.timeframe}")
@@ -264,7 +264,7 @@ def cmd_promising(args) -> int:
         return 0
     headers = ["hash", "name", "archetype", "tf", "status"]
     table = [
-        [s.behavioral_hash[:8], s.name, s.archetype, s.timeframe,
+        [s.strategy_hash[:8], s.name, s.archetype, s.timeframe,
          s.status.value if isinstance(s.status, Status) else s.status]
         for s in rows
     ]
@@ -438,7 +438,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_list.set_defaults(func=cmd_list)
 
     p_show = sub.add_parser("show", parents=[common], help="Show details for one strategy")
-    p_show.add_argument("hash_prefix", help="behavioral_hash prefix (>=6 chars)")
+    p_show.add_argument("hash_prefix", help="strategy_hash prefix (>=6 chars)")
     p_show.set_defaults(func=cmd_show)
 
     p_prom = sub.add_parser("promising", parents=[common], help="List promising candidates")

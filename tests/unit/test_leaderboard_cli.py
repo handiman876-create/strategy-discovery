@@ -71,7 +71,7 @@ def populated_conn(tmp_path):
         ("bbbbcccc11112222", "gamma"),
     ]:
         conn.execute(
-            "INSERT INTO strategies (behavioral_hash, name, archetype, timeframe, "
+            "INSERT INTO strategies (strategy_hash, name, archetype, timeframe, "
             "spec_json, first_generated_at, last_seen_at, status) "
             "VALUES (?, ?, 'mean_reversion', '1d', '{}', "
             "datetime('now'), datetime('now'), 'generated')",
@@ -137,11 +137,11 @@ def test_parse_since_invalid(cli):
 
 def _populate(db: Path) -> str:
     """Write one strategy with two evals (one promising) and one generation.
-    Returns the strategy's behavioral_hash for show/promote testing."""
+    Returns the strategy's strategy_hash for show/promote testing."""
     conn = initialize_db(db)
     h = "feedf00d" * 8  # 64 chars
     conn.execute(
-        "INSERT INTO strategies (behavioral_hash, name, archetype, timeframe, "
+        "INSERT INTO strategies (strategy_hash, name, archetype, timeframe, "
         "spec_json, first_generated_at, last_seen_at, status) "
         "VALUES (?, 'demo_smoke', 'mean_reversion', '1d', '{}', "
         "'2026-04-29T00:00:00', '2026-04-29T00:00:00', 'generated')",

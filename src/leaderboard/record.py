@@ -59,18 +59,18 @@ _STATUS_TIMESTAMP_COLUMN: dict[Status, Optional[str]] = {
 def record_generation(
     conn: sqlite3.Connection,
     spec: StrategySpec,
-    behavioral_hash: str,
+    strategy_hash: str,
     metadata: GenerationMetadata,
     *,
     imported_from: Optional[str] = None,
 ) -> int:
     """Persist one generation event. Upserts the strategy row by
-    behavioral_hash (insert if new, update last_seen_at + generation_count++
+    strategy_hash (insert if new, update last_seen_at + generation_count++
     if existing) and inserts a generation row. Returns the new generation id.
 
     Single transaction: if the generation insert fails, the strategy upsert
     is rolled back too."""
-    logger.debug("recording generation for hash %s", behavioral_hash)
+    logger.debug("recording generation for hash %s", strategy_hash)
     spec_json = spec.model_dump_json()
     if not spec.timeframes:
         raise ValueError(
@@ -88,18 +88,18 @@ def record_generation(
         conn.execute(
             """
             INSERT INTO strategies (
-                behavioral_hash, name, archetype, timeframe, spec_json,
+                strategy_hash, name, archetype, timeframe, spec_json,
                 first_generated_at, last_seen_at, generation_count,
                 status, imported_from
             ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'generated', ?)
-            ON CONFLICT (behavioral_hash) DO UPDATE SET
+            ON CONFLICT (strategy_hash) DO UPDATE SET
                 last_seen_at = excluded.last_seen_at,
                 generation_count = strategies.generation_count + 1,
                 name = excluded.name,
                 spec_json = excluded.spec_json
             """,
             (
-                behavioral_hash,
+                strategy_hash,
                 spec.name,
                 spec.archetype,
                 timeframe,
@@ -122,7 +122,7 @@ def record_generation(
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                behavioral_hash,
+                strategy_hash,
                 metadata.generated_at,
                 metadata.archetype,
                 metadata.requested_timeframe,
@@ -189,7 +189,7 @@ def record_evaluation(
         # FK IntegrityError we'd otherwise see on the eval INSERT, and
         # consolidates the auto-transition status read into the same query.
         row = conn.execute(
-            "SELECT status FROM strategies WHERE behavioral_hash = ?",
+            "SELECT status FROM strategies WHERE strategy_hash = ?",
             (strategy_hash,),
         ).fetchone()
         if row is None:
@@ -312,7 +312,7 @@ def _apply_status_transition(
     archive_reason). Raises ValueError on illegal transitions or missing
     strategy."""
     row = conn.execute(
-        "SELECT status, paper_outcome FROM strategies WHERE behavioral_hash = ?",
+        "SELECT status, paper_outcome FROM strategies WHERE strategy_hash = ?",
         (strategy_hash,),
     ).fetchone()
     if row is None:
@@ -363,7 +363,7 @@ def _apply_status_transition(
 
     params.append(strategy_hash)
     conn.execute(
-        f"UPDATE strategies SET {', '.join(set_clauses)} WHERE behavioral_hash = ?",
+        f"UPDATE strategies SET {', '.join(set_clauses)} WHERE strategy_hash = ?",
         params,
     )
 

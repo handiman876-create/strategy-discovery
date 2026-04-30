@@ -81,7 +81,7 @@ def _seed_strategy(conn, hash_="h1"):
     (FK-enforced); a generation hook would normally have inserted it
     already in real flows."""
     conn.execute(
-        "INSERT INTO strategies (behavioral_hash, name, archetype, "
+        "INSERT INTO strategies (strategy_hash, name, archetype, "
         "timeframe, spec_json, first_generated_at, last_seen_at, status) "
         "VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'), 'generated')",
         (hash_, "TestStrat", "mean_reversion", "1d", "{}"),

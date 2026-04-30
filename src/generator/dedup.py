@@ -1,21 +1,19 @@
 """Strategy hashing.
 
-Two functions live here during the step-10 transition:
+`compute_strategy_hash(spec)` — SHA-256 over a canonicalized JSON
+representation of the spec. Two textually different specs that describe
+the same logic produce the same hash. Differences in operators,
+thresholds, alias names, or archetype produce different hashes.
 
-* `compute_strategy_hash(spec)` — STRUCTURAL hash. SHA-256 over a
-  canonicalized JSON representation of the spec. Two textually different
-  specs that describe the same logic produce the same hash. Differences
-  in operators, thresholds, alias names, or archetype produce different
-  hashes. This is the active dedup primitive going forward.
+The previous `behavioral_hash(strategy_class)` (Phase 2/3) ran the
+strategy on a small fixture and hashed the resulting trade list. The
+step-10 audit found that approach collapsed unrelated specs to the
+same hash whenever they produced zero trades on the fixture
+(`sha256("[]")`), so it was replaced with structural hashing here in
+Phase 4 step 10. The fixture itself survives in `src/generator/fixture.py`
+for translator smoke tests.
 
-* `behavioral_hash(strategy_class)` — BEHAVIORAL hash (legacy, deprecated).
-  Runs the strategy on a small fixture and hashes the trade list. The
-  step-10 audit revealed this collapses unrelated specs to the same hash
-  whenever they produce zero trades on the fixture (`sha256("[]")`),
-  so it is being replaced. Kept here through commit 2 of the migration
-  to support a clean cutover; removed in commit 3.
-
-# Canonicalization rules (compute_strategy_hash)
+# Canonicalization rules
 
 Each canonicalizer enforces a strict KNOWN_FIELDS allowlist. If an input
 dict carries a key not in KNOWN_FIELDS, we raise UnknownFieldError with
@@ -53,13 +51,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Type
+from typing import Any
 
-from engine.backtester import BacktestConfig, run_backtest
-from engine.session import CryptoSession, RegularTradingHours
-from strategy.base import Strategy
-
-from .fixture import fixture_for_timeframe
 from .spec import StrategySpec
 
 
@@ -240,50 +233,3 @@ def _canonical_operand(node: dict) -> dict:
     )
 
 
-# ── Behavioral hash (legacy; removed in step-10 commit 3) ─────────────────────
-
-
-def behavioral_hash(
-    strategy_class: Type[Strategy],
-    *,
-    timeframe: str | None = None,
-    starting_capital: float = 10_000.0,
-    slippage: float = 0.01,
-) -> str:
-    """Run `strategy_class` on the fixture and return SHA-256 of its trade
-    fingerprint. Returns the same hash for any spec that produces the same
-    trades on the same fixture."""
-    tf = timeframe or _infer_timeframe(strategy_class)
-    bars = fixture_for_timeframe(tf)
-    asset_class = "stocks" if "stocks" in getattr(strategy_class, "supported_assets", []) else "crypto"
-    cfg = BacktestConfig(
-        starting_capital=starting_capital,
-        commission=0.0,
-        slippage=slippage,
-        realistic_fills=True,
-        session=RegularTradingHours() if asset_class == "stocks" else CryptoSession(),
-    )
-    result = run_backtest(strategy_class.__name__, bars, strategy_class(), cfg)
-
-    fingerprint: list[tuple[str, str, str, float]] = []
-    for t in result.trades:
-        fingerprint.append(
-            (
-                t.entry_time.isoformat(),
-                t.side,
-                t.exit_reason,
-                round(t.pnl, 4),
-            )
-        )
-    fingerprint.sort()
-    payload = json.dumps(fingerprint, sort_keys=True).encode()
-    return hashlib.sha256(payload).hexdigest()
-
-
-def _infer_timeframe(strategy_class: Type[Strategy]) -> str:
-    tfs = getattr(strategy_class, "timeframes", None) or []
-    if not tfs:
-        raise ValueError(f"{strategy_class.__name__} has no timeframes declared")
-    # Pick the lowest-frequency one for the fixture (we have 5m raw → resample up).
-    priority = {"1d": 4, "1h": 3, "15m": 2, "5m": 1}
-    return sorted(tfs, key=lambda t: priority.get(t, 0))[-1]

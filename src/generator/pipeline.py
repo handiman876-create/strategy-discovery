@@ -44,7 +44,7 @@ _QUIRKS_PATH = Path(__file__).resolve().parents[2] / "results" / "generation_qui
 class GenerateResult:
     spec: StrategySpec | None
     logs: list[GenerationLog]
-    behavioral_hash: str | None = None
+    strategy_hash: str | None = None
     code_path: Path | None = None
     failure_reason: str | None = None
 
@@ -67,7 +67,7 @@ def generate_strategy(
     client = client or ClaudeClient()
     arch = get_archetype(archetype)
     diversity = _load_diversity_context(archetype, n=diversity_n)
-    prior_hashes = _load_prior_behavioral_hashes(archetype)
+    prior_hashes = _load_prior_strategy_hashes(archetype)
 
     logs: list[GenerationLog] = []
     feedback: str | None = None
@@ -131,15 +131,15 @@ def generate_and_translate(
     successful generation is recorded via record_generation before
     returning. Failures are logged at WARNING and swallowed — the
     leaderboard is observability, not critical path. dedup=False
-    (behavioral_hash unavailable) skips the write with a DEBUG log
-    because behavioral_hash is the strategies-table primary key.
+    (strategy_hash unavailable) skips the write with a DEBUG log
+    because strategy_hash is the strategies-table primary key.
 
     requested_timeframe: when set, the generation prompt is constrained
     to that timeframe and each spec is rejected (counts as a failed
     attempt, increments the timeframe_mismatch quirk counter) if its
     timeframes field doesn't equal [requested_timeframe]."""
     client = client or ClaudeClient()
-    prior_hashes = _load_prior_behavioral_hashes(archetype) if dedup else set()
+    prior_hashes = _load_prior_strategy_hashes(archetype) if dedup else set()
 
     feedback: str | None = None
     diversity = _load_diversity_context(archetype, n=diversity_n)
@@ -209,7 +209,7 @@ def generate_and_translate(
             requested_timeframe=requested_timeframe,
         )
 
-        return GenerateResult(spec=spec, logs=logs, behavioral_hash=bh, code_path=path)
+        return GenerateResult(spec=spec, logs=logs, strategy_hash=bh, code_path=path)
 
     if requested_timeframe is not None and last_was_tf_mismatch:
         logger.warning(
@@ -388,7 +388,7 @@ def _load_diversity_context(archetype: str, n: int) -> list[dict]:
     return [m[1] for m in matches]
 
 
-def _load_prior_behavioral_hashes(archetype: str) -> set[str]:
+def _load_prior_strategy_hashes(archetype: str) -> set[str]:
     if not GENERATIONS_DIR.exists():
         return set()
     out: set[str] = set()
@@ -397,7 +397,7 @@ def _load_prior_behavioral_hashes(archetype: str) -> set[str]:
             payload = json.loads(path.read_text())
         except Exception:
             continue
-        h = payload.get("behavioral_hash")
+        h = payload.get("strategy_hash")
         if h:
             out.add(h)
     return out

@@ -74,7 +74,7 @@ def _result(**overrides):
 
 def _insert_strategy(conn, hash_="h1", status=Status.GENERATED, paper_outcome=None):
     conn.execute(
-        "INSERT INTO strategies (behavioral_hash, name, archetype, timeframe, "
+        "INSERT INTO strategies (strategy_hash, name, archetype, timeframe, "
         "spec_json, first_generated_at, last_seen_at, status, paper_outcome) "
         "VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'), ?, ?)",
         (hash_, "demo", "mean_reversion", "1d", "{}", status.value, paper_outcome),
@@ -86,11 +86,11 @@ def _insert_strategy(conn, hash_="h1", status=Status.GENERATED, paper_outcome=No
 
 def test_record_generation_inserts_strategy_and_generation(conn):
     spec = _spec()
-    gen_id = record_generation(conn, spec, behavioral_hash="abc123", metadata=_meta())
+    gen_id = record_generation(conn, spec, strategy_hash="abc123", metadata=_meta())
     assert gen_id == 1
 
     s = conn.execute(
-        "SELECT * FROM strategies WHERE behavioral_hash = ?", ("abc123",)
+        "SELECT * FROM strategies WHERE strategy_hash = ?", ("abc123",)
     ).fetchone()
     assert s["name"] == "demo_strategy"
     assert s["archetype"] == "mean_reversion"
@@ -109,15 +109,15 @@ def test_record_generation_inserts_strategy_and_generation(conn):
 
 def test_record_generation_upserts_existing_strategy(conn):
     spec = _spec()
-    record_generation(conn, spec, behavioral_hash="abc123", metadata=_meta())
+    record_generation(conn, spec, strategy_hash="abc123", metadata=_meta())
     # Second call: same behavioral hash, different prompt → bumps gen count.
     record_generation(
-        conn, spec, behavioral_hash="abc123",
+        conn, spec, strategy_hash="abc123",
         metadata=_meta(prompt_hash="ph_002", retry_count=2),
     )
 
     s = conn.execute(
-        "SELECT generation_count, name FROM strategies WHERE behavioral_hash = ?",
+        "SELECT generation_count, name FROM strategies WHERE strategy_hash = ?",
         ("abc123",),
     ).fetchone()
     assert s["generation_count"] == 2
@@ -142,11 +142,11 @@ def test_record_generation_rolls_back_on_failure(conn):
     bad_meta.model_version = None  # type: ignore[assignment]
 
     with pytest.raises(sqlite3.IntegrityError):
-        record_generation(conn, spec, behavioral_hash="rb_hash", metadata=bad_meta)
+        record_generation(conn, spec, strategy_hash="rb_hash", metadata=bad_meta)
 
     # Strategy upsert must have been rolled back: hash should not exist.
     row = conn.execute(
-        "SELECT 1 FROM strategies WHERE behavioral_hash = ?", ("rb_hash",)
+        "SELECT 1 FROM strategies WHERE strategy_hash = ?", ("rb_hash",)
     ).fetchone()
     assert row is None
 
@@ -155,7 +155,7 @@ def test_record_generation_rejects_spec_with_no_timeframes(conn):
     spec = _spec()
     spec.timeframes = []  # type: ignore[assignment]
     with pytest.raises(ValueError, match="no timeframes"):
-        record_generation(conn, spec, behavioral_hash="h", metadata=_meta())
+        record_generation(conn, spec, strategy_hash="h", metadata=_meta())
 
 
 # ── record_evaluation ────────────────────────────────────────────────────────
@@ -193,7 +193,7 @@ def test_record_evaluation_auto_promotes_generated_to_fast_evaluated(conn):
     _insert_strategy(conn, "h1", Status.GENERATED)
     record_evaluation(conn, "h1", _result(), "fast")
     s = conn.execute(
-        "SELECT status, fast_evaluated_at FROM strategies WHERE behavioral_hash = ?",
+        "SELECT status, fast_evaluated_at FROM strategies WHERE strategy_hash = ?",
         ("h1",),
     ).fetchone()
     assert s["status"] == "fast_evaluated"
@@ -207,7 +207,7 @@ def test_record_evaluation_canonical_promotes_skipping_fast(conn):
     record_evaluation(conn, "h1", _result(), "canonical")
     s = conn.execute(
         "SELECT status, fast_evaluated_at, canonical_evaluated_at "
-        "FROM strategies WHERE behavioral_hash = ?",
+        "FROM strategies WHERE strategy_hash = ?",
         ("h1",),
     ).fetchone()
     assert s["status"] == "canonical_evaluated"
@@ -221,7 +221,7 @@ def test_record_evaluation_does_not_demote(conn):
     _insert_strategy(conn, "h1", Status.PAPER_TRADING)
     eval_id = record_evaluation(conn, "h1", _result(), "fast")
     s = conn.execute(
-        "SELECT status FROM strategies WHERE behavioral_hash = ?", ("h1",)
+        "SELECT status FROM strategies WHERE strategy_hash = ?", ("h1",)
     ).fetchone()
     assert s["status"] == "paper_trading"
     # eval row was still recorded
@@ -249,7 +249,7 @@ def test_transition_status_legal_manual_archive(conn):
     transition_status(conn, "h1", Status.ARCHIVED, archive_reason="superseded")
     s = conn.execute(
         "SELECT status, archive_reason, archived_at FROM strategies "
-        "WHERE behavioral_hash = ?",
+        "WHERE strategy_hash = ?",
         ("h1",),
     ).fetchone()
     assert s["status"] == "archived"
@@ -276,11 +276,11 @@ def test_transition_status_real_money_requires_paper_outcome_pass(conn):
         transition_status(conn, "h1", Status.REAL_MONEY_CANDIDATE)
     # Now flip the outcome and try again:
     conn.execute(
-        "UPDATE strategies SET paper_outcome='pass' WHERE behavioral_hash='h1'"
+        "UPDATE strategies SET paper_outcome='pass' WHERE strategy_hash='h1'"
     )
     transition_status(conn, "h1", Status.REAL_MONEY_CANDIDATE)
     assert conn.execute(
-        "SELECT status FROM strategies WHERE behavioral_hash='h1'"
+        "SELECT status FROM strategies WHERE strategy_hash='h1'"
     ).fetchone()["status"] == "real_money_candidate"
 
 
@@ -292,7 +292,7 @@ def test_transition_status_paper_complete_writes_outcome_and_notes(conn):
     )
     s = conn.execute(
         "SELECT status, paper_outcome, paper_notes, paper_ended_at "
-        "FROM strategies WHERE behavioral_hash = ?",
+        "FROM strategies WHERE strategy_hash = ?",
         ("h1",),
     ).fetchone()
     assert s["status"] == "paper_complete"
@@ -308,10 +308,10 @@ def test_transition_status_no_op_on_same_status(conn):
     # Pin paper_started_at to a known value.
     conn.execute(
         "UPDATE strategies SET paper_started_at='2026-01-01T00:00:00' "
-        "WHERE behavioral_hash='h1'"
+        "WHERE strategy_hash='h1'"
     )
     transition_status(conn, "h1", Status.PAPER_TRADING)
     s = conn.execute(
-        "SELECT paper_started_at FROM strategies WHERE behavioral_hash='h1'"
+        "SELECT paper_started_at FROM strategies WHERE strategy_hash='h1'"
     ).fetchone()
     assert s["paper_started_at"] == "2026-01-01T00:00:00"

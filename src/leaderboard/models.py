@@ -85,7 +85,7 @@ LEGAL_MANUAL_TRANSITIONS: dict[Status, frozenset[Status]] = {
 
 @dataclass
 class Strategy:
-    behavioral_hash: str
+    strategy_hash: str
     name: str
     archetype: str
     timeframe: str

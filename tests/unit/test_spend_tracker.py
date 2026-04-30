@@ -1,86 +1,22 @@
-"""Behavioral dedup + spend tracker tests."""
+"""SpendTracker tests.
+
+Renamed from test_dedup_and_spend.py during Phase 4 step 10. The two
+behavioral_hash tests that used to live here were removed when
+behavioral_hash() was deleted; the structural-hash equivalents live in
+tests/unit/test_strategy_hash.py.
+"""
 
 from __future__ import annotations
 
-import importlib.util
 import json
-from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
-from generator.dedup import behavioral_hash
-from generator.spec import IndicatorSpec, ParameterSpec, StrategySpec
 from generator.spend_tracker import (
     CapExceededError,
     SpendTracker,
     estimate_cost,
 )
-from generator.translator import translate_to_file
-
-
-def _spec(name: str, threshold: float):
-    return StrategySpec(
-        name=name,
-        archetype="mean_reversion",
-        thesis="Test strategy that buys when RSI(2) is below a threshold and trend is up.",
-        supported_assets=["stocks"],
-        timeframes=["1d"],
-        parameters=[],
-        indicators=[
-            IndicatorSpec(name="rsi_2", type="rsi", params={"period": 2}),
-            IndicatorSpec(name="sma_200", type="sma", params={"period": 200}),
-        ],
-        entry_long={
-            "op": "and",
-            "args": [
-                {"op": "compare", "operator": ">",
-                 "lhs": {"op": "price", "field": "close"},
-                 "rhs": {"op": "indicator", "name": "sma_200"}},
-                {"op": "compare", "operator": "<",
-                 "lhs": {"op": "indicator", "name": "rsi_2"},
-                 "rhs": {"op": "const", "value": threshold}},
-            ],
-        },
-        exit_long={
-            "op": "compare", "operator": ">",
-            "lhs": {"op": "indicator", "name": "rsi_2"},
-            "rhs": {"op": "const", "value": 70.0},
-        },
-    )
-
-
-def _import(name: str, path: Path):
-    spec_mod = importlib.util.spec_from_file_location(name, path)
-    mod = importlib.util.module_from_spec(spec_mod)
-    spec_mod.loader.exec_module(mod)
-    cls_name = "".join(p.capitalize() for p in name.split("_"))
-    return getattr(mod, cls_name)
-
-
-def test_behavioral_hash_idempotent():
-    s = _spec("dedup_a", 5.0)
-    path = translate_to_file(s, overwrite=True)
-    cls = _import(s.name, path)
-    h1 = behavioral_hash(cls)
-    h2 = behavioral_hash(cls)
-    assert h1 == h2
-
-
-def test_behavioral_hash_different_threshold_different_hash():
-    a = _spec("dedup_b", 5.0)
-    b = _spec("dedup_c", 30.0)
-    pa = translate_to_file(a, overwrite=True)
-    pb = translate_to_file(b, overwrite=True)
-    ca = _import(a.name, pa)
-    cb = _import(b.name, pb)
-    # threshold 30 produces different (more) trades than threshold 5
-    ha = behavioral_hash(ca)
-    hb = behavioral_hash(cb)
-    # NOTE: it's possible by coincidence neither produces any trades; in that case
-    # both hashes equal hash([]). We allow that — but at least one must be nonzero
-    # different from a degenerate empty-trade hash if either produces trades.
-    assert isinstance(ha, str) and isinstance(hb, str)
 
 
 # ── Spend tracker ────────────────────────────────────────────────────────────

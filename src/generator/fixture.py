@@ -1,4 +1,11 @@
-"""Reproducible fixture used for behavioral dedup and translator smoke tests.
+"""Reproducible fixture used by translator smoke tests.
+
+Used by `tests/unit/test_translator.py`. Previously also used by
+`behavioral_hash()` in `dedup.py` until structural hashing
+(`compute_strategy_hash`) replaced it in Phase 4 step 10 — that hash
+no longer needs a fixture-derived trade list, but the fixture itself
+remains the cleanest way to exercise the translator end-to-end (DSL →
+emitted code → import → run).
 
 The fixture is AMD 2024-Q3 (3 months of 5-min bars), loaded from the
 train_test cache. Resampled to 1d on demand for daily strategies.

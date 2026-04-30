@@ -44,12 +44,12 @@ _VALID_EVAL_TYPES: frozenset[str] = frozenset({"fast", "canonical", "holdout"})
 
 
 def get_strategy(
-    conn: sqlite3.Connection, behavioral_hash: str
+    conn: sqlite3.Connection, strategy_hash: str
 ) -> Optional[Strategy]:
-    """Return the Strategy with this behavioral_hash, or None if not found."""
+    """Return the Strategy with this strategy_hash, or None if not found."""
     row = conn.execute(
-        "SELECT * FROM strategies WHERE behavioral_hash = ?",
-        (behavioral_hash,),
+        "SELECT * FROM strategies WHERE strategy_hash = ?",
+        (strategy_hash,),
     ).fetchone()
     return _strategy_from_row(row) if row is not None else None
 
@@ -176,7 +176,7 @@ def get_archetype_summary(
     g_params: list = [archetype]
     g_join = ""
     if timeframe is not None:
-        g_join = "JOIN strategies s ON s.behavioral_hash = generations.strategy_hash"
+        g_join = "JOIN strategies s ON s.strategy_hash = generations.strategy_hash"
         g_where.append("s.timeframe = ?")
         g_params.append(timeframe)
     if since is not None:
@@ -211,7 +211,7 @@ def get_archetype_summary(
     # ── evaluations side ──
     e_where = ["s.archetype = ?"]
     e_params: list = [archetype]
-    e_join = "JOIN strategies s ON s.behavioral_hash = evaluations.strategy_hash"
+    e_join = "JOIN strategies s ON s.strategy_hash = evaluations.strategy_hash"
     if timeframe is not None:
         e_where.append("s.timeframe = ?")
         e_params.append(timeframe)
@@ -337,7 +337,7 @@ def get_promising_candidates(
         )
         SELECT s.*, ranked.score AS _score, ranked.evaluated_at AS _at
         FROM strategies s
-        JOIN ranked ON s.behavioral_hash = ranked.strategy_hash AND ranked.rn = 1
+        JOIN ranked ON s.strategy_hash = ranked.strategy_hash AND ranked.rn = 1
         ORDER BY _score DESC, _at DESC
     """
     rows = conn.execute(sql, (eval_type,)).fetchall()
@@ -349,7 +349,7 @@ def get_promising_candidates(
 
 def _strategy_from_row(row: sqlite3.Row) -> Strategy:
     return Strategy(
-        behavioral_hash=row["behavioral_hash"],
+        strategy_hash=row["strategy_hash"],
         name=row["name"],
         archetype=row["archetype"],
         timeframe=row["timeframe"],

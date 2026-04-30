@@ -15,7 +15,6 @@ in the prompt under "Already explored — your spec must materially differ".
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import logging
 import sys
@@ -28,7 +27,7 @@ from leaderboard.record import record_generation
 
 from .archetypes import get_archetype
 from .claude_client import ClaudeClient, GenerationLog
-from .dedup import behavioral_hash
+from .dedup import compute_strategy_hash
 from .spec import StrategySpec
 from .translator import GENERATED_DIR, TranslationError, translate_to_file
 
@@ -163,6 +162,32 @@ def generate_and_translate(
             last_was_tf_mismatch = was_tf_mismatch
             continue
 
+        # Dedup BEFORE translate: compute_strategy_hash works directly from
+        # the spec, so we can reject duplicates without paying the
+        # translate_to_file cost (file write + scan_unreachable_defaults +
+        # quirk-counter side effect). Side effect: if a duplicate spec
+        # would also have failed validate_for_translation, we now miss
+        # that signal — but the spec was a duplicate anyway, so the
+        # validation failure was redundant information.
+        if dedup:
+            try:
+                bh = compute_strategy_hash(spec)
+            except Exception as e:
+                feedback = f"Attempt {attempt} strategy hash failed: {e}"
+                last_was_tf_mismatch = False
+                continue
+
+            if bh in prior_hashes:
+                feedback = (
+                    f"Attempt {attempt} duplicate of an existing strategy "
+                    f"(structural hash {bh[:12]}). Choose materially different "
+                    f"parameters or logic."
+                )
+                last_was_tf_mismatch = False
+                continue
+        else:
+            bh = None
+
         try:
             path = translate_to_file(spec, overwrite=True)
         except TranslationError as e:
@@ -173,25 +198,6 @@ def generate_and_translate(
             feedback = f"Attempt {attempt} translator crashed: {e}"
             last_was_tf_mismatch = False
             continue
-
-        if dedup:
-            try:
-                strategy_class = _import_generated(spec.name, path)
-                bh = behavioral_hash(strategy_class)
-            except Exception as e:
-                feedback = f"Attempt {attempt} behavioral hash failed: {e}"
-                last_was_tf_mismatch = False
-                continue
-
-            if bh in prior_hashes:
-                feedback = (
-                    f"Attempt {attempt} duplicate of an existing strategy (behavioral "
-                    f"hash {bh[:12]}). Choose materially different parameters or logic."
-                )
-                last_was_tf_mismatch = False
-                continue
-        else:
-            bh = None
 
         _record_generation_to_leaderboard(
             spec=spec,
@@ -397,10 +403,3 @@ def _load_prior_behavioral_hashes(archetype: str) -> set[str]:
     return out
 
 
-def _import_generated(name: str, path: Path):
-    spec_mod = importlib.util.spec_from_file_location(name, path)
-    mod = importlib.util.module_from_spec(spec_mod)
-    spec_mod.loader.exec_module(mod)
-    # Strategy class name is CamelCase of the snake name.
-    class_name = "".join(p.capitalize() for p in name.split("_"))
-    return getattr(mod, class_name)

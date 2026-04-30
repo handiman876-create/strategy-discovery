@@ -17,16 +17,22 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import logging
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from leaderboard.adapters import to_generation_metadata
+from leaderboard.record import record_generation
 
 from .archetypes import get_archetype
 from .claude_client import ClaudeClient, GenerationLog
 from .dedup import behavioral_hash
 from .spec import StrategySpec
 from .translator import GENERATED_DIR, TranslationError, translate_to_file
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_RETRIES = 3
 DEFAULT_DIVERSITY_N = 5
@@ -102,9 +108,12 @@ def generate_and_translate(
 ) -> GenerateResult:
     """Generate + translate. Adds behavioral-dedup retry on top of generate_strategy.
 
-    conn: optional sqlite3.Connection to a leaderboard DB. Phase 4 step 8b
-    plumbing only — accepted but not yet used. Step 8c calls record_generation
-    on a successful generation when conn is set."""
+    conn: optional sqlite3.Connection to a leaderboard DB. When set, a
+    successful generation is recorded via record_generation before
+    returning. Failures are logged at WARNING and swallowed — the
+    leaderboard is observability, not critical path. dedup=False
+    (behavioral_hash unavailable) skips the write with a DEBUG log
+    because behavioral_hash is the strategies-table primary key."""
     client = client or ClaudeClient()
     prior_hashes = _load_prior_behavioral_hashes(archetype) if dedup else set()
 
@@ -151,6 +160,15 @@ def generate_and_translate(
         else:
             bh = None
 
+        _record_generation_to_leaderboard(
+            spec=spec,
+            bh=bh,
+            logs=logs,
+            conn=conn,
+            archetype=archetype,
+            code_path=path,
+        )
+
         return GenerateResult(spec=spec, logs=logs, behavioral_hash=bh, code_path=path)
 
     return GenerateResult(
@@ -161,6 +179,43 @@ def generate_and_translate(
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
+
+
+def _record_generation_to_leaderboard(
+    *,
+    spec: StrategySpec,
+    bh: str | None,
+    logs: list[GenerationLog],
+    conn: Any,
+    archetype: str,
+    code_path: Path,
+) -> None:
+    """Persist this generation to the leaderboard. Three early exits:
+
+      conn is None       — no DB configured (typical for tests / dry runs)
+      bh   is None       — dedup=False, no primary key for the strategies row
+      record_generation raises — log warning, swallow
+
+    The third case is the load-bearing one: the leaderboard is an
+    observability/audit surface, not a critical-path output. Generation
+    succeeded and the on-disk artifacts already exist; a DB write failure
+    must not lose the strategy that was just produced.
+    """
+    if conn is None:
+        return
+    if bh is None:
+        logger.debug("skipping leaderboard write, dedup disabled")
+        return
+    try:
+        metadata = to_generation_metadata(
+            logs, archetype=archetype, spec_path=str(code_path),
+        )
+        record_generation(conn, spec, bh, metadata)
+    except Exception as e:
+        logger.warning(
+            "leaderboard write failed for strategy %s (hash %s): %s",
+            spec.name, bh[:12], e,
+        )
 
 
 def _load_diversity_context(archetype: str, n: int) -> list[dict]:

@@ -10,7 +10,6 @@ from leaderboard.db import initialize_db
 from leaderboard.models import (
     ArchetypeSummary,
     Evaluation,
-    EvaluationResult,
     Generation,
     GenerationMetadata,
     Status,

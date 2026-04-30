@@ -9,7 +9,7 @@ import pytest
 
 from generator.spec import IndicatorSpec, ParameterSpec, StrategySpec
 from leaderboard.db import initialize_db
-from leaderboard.models import EvaluationResult, GenerationMetadata, Status
+from leaderboard.models import EvaluationRecord, GenerationMetadata, Status
 from leaderboard.record import (
     record_evaluation,
     record_generation,
@@ -69,7 +69,7 @@ def _result(**overrides):
         duration_seconds=8.0,
     )
     base.update(overrides)
-    return EvaluationResult(**base)
+    return EvaluationRecord(**base)
 
 
 def _insert_strategy(conn, hash_="h1", status=Status.GENERATED, paper_outcome=None):

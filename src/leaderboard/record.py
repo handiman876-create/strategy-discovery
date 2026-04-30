@@ -29,7 +29,7 @@ from generator.spec import StrategySpec
 from .models import (
     EVAL_TYPE_AUTO_TRANSITIONS,
     LEGAL_MANUAL_TRANSITIONS,
-    EvaluationResult,
+    EvaluationRecord,
     GenerationMetadata,
     Status,
     _utcnow_iso,
@@ -155,7 +155,7 @@ def record_generation(
 def record_evaluation(
     conn: sqlite3.Connection,
     strategy_hash: str,
-    result: EvaluationResult,
+    result: EvaluationRecord,
     eval_type: str,
     *,
     imported_from: Optional[str] = None,

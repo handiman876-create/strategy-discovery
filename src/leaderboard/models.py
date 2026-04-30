@@ -191,8 +191,12 @@ class GenerationMetadata:
 
 
 @dataclass
-class EvaluationResult:
+class EvaluationRecord:
     """Inputs to record_evaluation alongside (strategy_hash, eval_type).
+
+    Named "Record" (not "Result") to avoid a collision with
+    `evaluation.pipeline.EvaluationResult` and to read as a pair with the
+    `Evaluation` row dataclass: a record goes in, an evaluation comes out.
 
     `failed_conditions` mirrors evaluation.scoring.FailedCondition; pass an
     asdict-style list (keys: name, required, actual, deficit). record.py

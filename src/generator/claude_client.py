@@ -68,6 +68,7 @@ class GenerationLog:
     actual_cost_usd: float
     call_id: str
     attempt: int
+    raw_response_path: str | None = None  # set by _save_log; single source of truth for the archived JSON path
 
 
 class ClaudeClient:
@@ -282,6 +283,7 @@ class ClaudeClient:
             "attempt": log.attempt,
         }
         path.write_text(json.dumps(payload, indent=2, default=str))
+        log.raw_response_path = str(path)
         return path
 
 

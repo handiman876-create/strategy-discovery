@@ -1,8 +1,7 @@
 """Generation orchestrator.
 
-generate_strategy(archetype) → (StrategySpec | None, list[GenerationLog])
-generate_and_translate(archetype) → (StrategySpec, Path) — raises on failure
-generate_evaluate(archetype, fast=False) → EvaluationResult | FastEvaluationResult
+generate_strategy(archetype) → GenerateResult (spec, logs)
+generate_and_translate(archetype) → GenerateResult (spec, logs, hash, code_path)
 
 Retry loop: up to 3 attempts. Each retry feeds the prior attempt's failure
 reason back to Claude as `retry_feedback`. Validation errors include

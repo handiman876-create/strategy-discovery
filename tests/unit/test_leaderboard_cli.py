@@ -194,6 +194,22 @@ def test_cli_list_json_smoke(tmp_path):
     assert parsed[0]["status"] == "generated"
 
 
+def test_cli_global_flags_work_after_subcommand(tmp_path):
+    """Regression: --json (and --db) must work in either position relative to
+    the subcommand. Argparse's default behavior puts global flags only on the
+    top-level parser; a hand-test caught that `lb list --json` silently
+    emitted tabular output. The fix uses default=argparse.SUPPRESS on the
+    subparser side so it doesn't overwrite the top-level value."""
+    db = tmp_path / "lb.db"
+    _populate(db)
+    p_before = _run(["--json", "list"], db)
+    p_after = _run(["list", "--json"], db)
+    assert p_before.returncode == 0
+    assert p_after.returncode == 0
+    # Both positions must produce the same JSON output.
+    assert json.loads(p_before.stdout) == json.loads(p_after.stdout)
+
+
 def test_cli_show_smoke(tmp_path):
     db = tmp_path / "lb.db"
     h = _populate(db)

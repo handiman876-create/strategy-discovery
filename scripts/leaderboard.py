@@ -383,12 +383,40 @@ def cmd_archive(args) -> int:
 # ── Argparse wiring ──────────────────────────────────────────────────────────
 
 
+def _build_subparser_globals() -> argparse.ArgumentParser:
+    """Subparser-side common parser. Defaults are argparse.SUPPRESS so that
+    when --db/--json appear *before* the subcommand (parsed by the top-level
+    parser), the subparser doesn't overwrite the top-level value with its
+    own default. With SUPPRESS, the attribute is added to the namespace only
+    when the flag is explicitly given on the subparser side. Net effect: the
+    user can write the global flags before OR after the subcommand
+    interchangeably (e.g. `lb --json list` and `lb list --json` both work)."""
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument(
+        "--db",
+        type=Path,
+        default=argparse.SUPPRESS,
+        help=f"Path to leaderboard.db (default: {DEFAULT_DB_PATH})",
+    )
+    common.add_argument(
+        "--json",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="Emit JSON instead of tabular output",
+    )
+    return common
+
+
 def build_parser() -> argparse.ArgumentParser:
+    common = _build_subparser_globals()
     parser = argparse.ArgumentParser(
         prog="leaderboard.py",
         description="Phase 4 leaderboard CLI (read-only by default; "
         "promote/archive write).",
     )
+    # Top-level versions carry the real defaults; the subparser versions
+    # (via parents=[common]) use SUPPRESS so they don't overwrite. See
+    # _build_subparser_globals for the rationale.
     parser.add_argument(
         "--db",
         type=Path,
@@ -402,18 +430,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_list = sub.add_parser("list", help="List strategies")
+    p_list = sub.add_parser("list", parents=[common], help="List strategies")
     p_list.add_argument("--archetype")
     p_list.add_argument("--status", choices=[s.value for s in Status])
     p_list.add_argument("--timeframe")
     p_list.add_argument("--limit", type=int, default=50)
     p_list.set_defaults(func=cmd_list)
 
-    p_show = sub.add_parser("show", help="Show details for one strategy")
+    p_show = sub.add_parser("show", parents=[common], help="Show details for one strategy")
     p_show.add_argument("hash_prefix", help="behavioral_hash prefix (>=6 chars)")
     p_show.set_defaults(func=cmd_show)
 
-    p_prom = sub.add_parser("promising", help="List promising candidates")
+    p_prom = sub.add_parser("promising", parents=[common], help="List promising candidates")
     p_prom.add_argument(
         "--eval-type",
         dest="eval_type",
@@ -422,13 +450,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_prom.set_defaults(func=cmd_promising)
 
-    p_arch = sub.add_parser("archetype", help="Archetype rollup metrics")
+    p_arch = sub.add_parser("archetype", parents=[common], help="Archetype rollup metrics")
     p_arch.add_argument("archetype_name")
     p_arch.add_argument("--timeframe")
     p_arch.add_argument("--since", help="YYYY-MM-DD or Nd (e.g. '7d')")
     p_arch.set_defaults(func=cmd_archetype)
 
-    p_q = sub.add_parser("quirks", help="Quirk counters")
+    p_q = sub.add_parser("quirks", parents=[common], help="Quirk counters")
     p_q.add_argument(
         "--trend",
         choices=["stringification", "kwarg_validator", "unreachable_default"],
@@ -442,7 +470,7 @@ def build_parser() -> argparse.ArgumentParser:
     promote_targets = [
         s.value for s in Status if s not in (Status.GENERATED, Status.ARCHIVED)
     ]
-    p_promote = sub.add_parser("promote", help="Advance a strategy's status")
+    p_promote = sub.add_parser("promote", parents=[common], help="Advance a strategy's status")
     p_promote.add_argument("hash_prefix")
     p_promote.add_argument("--to", required=True, choices=promote_targets)
     p_promote.add_argument(
@@ -457,7 +485,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_promote.set_defaults(func=cmd_promote)
 
-    p_archive = sub.add_parser("archive", help="Archive a strategy (terminal)")
+    p_archive = sub.add_parser("archive", parents=[common], help="Archive a strategy (terminal)")
     p_archive.add_argument("hash_prefix")
     p_archive.add_argument("--reason", required=True)
     p_archive.set_defaults(func=cmd_archive)

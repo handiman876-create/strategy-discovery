@@ -119,3 +119,33 @@ def record_quirk(name: str, **breakdowns: str) -> None:
   * Verify: `git log --format='%ae' | sort -u` shows only the noreply alias
 
 **Why deferred:** rewriting now adds risk without current benefit (no exposure on private VPS). The right time is the moment before publishing, when the rewrite strategy can be comprehensive across all commits, not just in-session ones.
+
+## Phase 5: dedup hash review
+
+### Fixture-induced behavioral hash collapse — PARTIALLY RESOLVED in step 10
+
+**Original finding (Phase 4 step 10 audit):** `behavioral_hash` (Phase 2/3) collapsed many specs to identical hashes because the dedup fixture (AMD 2024-Q3) produced zero trades for most generated strategies — 127 distinct mean_reversion specs hashed to 1, 6 momentum to 1, 5 overnight_session to 1. The hash effectively encoded "did this produce zero trades on the fixture" rather than "is this behaviorally distinct."
+
+**Resolved (Phase 4 step 10, commits 1–4, replacing `behavioral_hash` with `compute_strategy_hash`):** Structural hashing over a canonicalized spec representation now differentiates specs by content rather than by trade fingerprint. Cross-archetype collapse is gone. Smoke test on the same repo state (post-migration):
+
+| archetype | distinct hashes (behavioral) | distinct hashes (structural) |
+|---|---|---|
+| mean_reversion | 1 | 10 |
+| microstructure | 5 | 6 |
+| momentum | 1 | 6 |
+| overnight_session | 1 | 5 |
+| seasonality | 1 | 5 |
+| volatility_breakout | 1 | 4 |
+| **total** | **5** | **36** |
+
+A single eval-class label (e.g. `mock_strat_1d` × 174 generations) still collapses to one strategy row — that's the desired identity behavior for re-runs of the same fixture, not a bug.
+
+### Residual concerns (NOT resolved — Phase 5 work)
+
+Structural hashing has its own properties worth tracking:
+
+  * **Alias-name sensitivity.** Two specs with identical logic but different indicator alias names (`rsi_short` vs `rsi_2`) hash differently. Documented as a deliberate choice in `src/generator/dedup.py` — alias normalization (renaming aliases to a canonical form derived from `(type, params)` and rewriting all DSL refs) is more complex and was deferred. Revisit if observability shows alias variation creates significant noise.
+  * **No operator normalization.** `a > b` and `b < a` hash differently. Same for `a == b` vs `b == a`. Could add semantic operator normalization, but the trade-off is more complex canonicalization for marginal collapse benefit.
+  * **No behavioral equivalence.** Two structurally different specs that happen to produce identical trade lists are now distinct in the leaderboard. With behavioral hashing they would have collapsed; with structural hashing they don't. This may be the correct answer (different specs are different strategies) or a regression in equivalence-detection — it depends on the use case. Worth observing in practice before deciding whether to add a complementary trade-fingerprint hash as a secondary dedup signal.
+
+**Trigger for action:** if alias-variation noise or operator-asymmetry collisions become observable in leaderboard queries, prioritize a Phase 5 follow-up. Otherwise this section can be retired after a stretch of clean operation under the new hash.

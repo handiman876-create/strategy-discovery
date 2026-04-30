@@ -380,6 +380,36 @@ def cmd_archive(args) -> int:
     return 0
 
 
+def cmd_backfill(args) -> int:
+    """Walk results/ and import historical generation/eval artifacts as
+    leaderboard rows marked imported_from='backfill'. Idempotent on the
+    natural keys; logs all skips to results/backfill_<ts>.log."""
+    from leaderboard.backfill import backfill_all
+
+    results_dir = Path(args.results_dir)
+    if not results_dir.exists():
+        raise CliError(f"results dir does not exist: {results_dir}")
+
+    conn = initialize_db(args.db)
+    try:
+        summary = backfill_all(conn, results_dir)
+    finally:
+        conn.close()
+
+    if getattr(args, "json", False):
+        _print_json({
+            "imported_strategies": summary.imported_strategies,
+            "imported_generations": summary.imported_generations,
+            "imported_evaluations": summary.imported_evaluations,
+            "skipped_generations": len(summary.skipped_generations),
+            "skipped_evaluations": len(summary.skipped_evaluations),
+            "log_path": str(summary.log_path) if summary.log_path else None,
+        })
+    else:
+        print(summary.render())
+    return 0
+
+
 # ── Argparse wiring ──────────────────────────────────────────────────────────
 
 
@@ -489,6 +519,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_archive.add_argument("hash_prefix")
     p_archive.add_argument("--reason", required=True)
     p_archive.set_defaults(func=cmd_archive)
+
+    p_back = sub.add_parser(
+        "backfill",
+        parents=[common],
+        help="Import historical results/ artifacts into the leaderboard",
+    )
+    p_back.add_argument(
+        "--results-dir",
+        type=Path,
+        default=Path(__file__).resolve().parent.parent / "results",
+        help="Path to the results/ directory to walk (default: repo results/)",
+    )
+    p_back.set_defaults(func=cmd_backfill)
 
     return parser
 

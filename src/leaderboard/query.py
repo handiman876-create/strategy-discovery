@@ -317,9 +317,15 @@ def get_promising_candidates(
     conn: sqlite3.Connection,
     eval_type: str = "canonical",
 ) -> list[Strategy]:
-    """Return strategies that have at least one promising evaluation of the
-    given eval_type, ordered by their *most recent* promising eval's score
-    DESC. NULL scores naturally sort last in DESC order under SQLite."""
+    """Return strategies whose *latest* evaluation of the given eval_type is
+    promising, ordered by that eval's score DESC. NULL scores naturally sort
+    last in DESC order under SQLite.
+
+    The promising=1 filter is applied AFTER the per-strategy
+    most-recent-windowing, not before. If we filtered inside the CTE, a
+    strategy with [old promising=1, new promising=0] would have its old
+    eval picked as `rn=1` (the only row for that strategy inside the
+    filtered CTE) and incorrectly surface as a candidate."""
     if eval_type not in _VALID_EVAL_TYPES:
         raise ValueError(
             f"unknown eval_type {eval_type!r}; allowed: "
@@ -327,17 +333,19 @@ def get_promising_candidates(
         )
     sql = """
         WITH ranked AS (
-            SELECT strategy_hash, score, evaluated_at,
+            SELECT strategy_hash, score, evaluated_at, promising,
                    ROW_NUMBER() OVER (
                        PARTITION BY strategy_hash
                        ORDER BY evaluated_at DESC
                    ) AS rn
             FROM evaluations
-            WHERE eval_type = ? AND promising = 1
+            WHERE eval_type = ?
         )
         SELECT s.*, ranked.score AS _score, ranked.evaluated_at AS _at
         FROM strategies s
-        JOIN ranked ON s.strategy_hash = ranked.strategy_hash AND ranked.rn = 1
+        JOIN ranked ON s.strategy_hash = ranked.strategy_hash
+                   AND ranked.rn = 1
+                   AND ranked.promising = 1
         ORDER BY _score DESC, _at DESC
     """
     rows = conn.execute(sql, (eval_type,)).fetchall()

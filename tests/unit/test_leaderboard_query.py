@@ -360,3 +360,20 @@ def test_get_promising_candidates_filters_by_eval_type(conn):
 def test_get_promising_candidates_rejects_unknown_eval_type(conn):
     with pytest.raises(ValueError, match="unknown eval_type"):
         get_promising_candidates(conn, eval_type="garbage")
+
+
+def test_get_promising_candidates_excludes_strategy_whose_latest_is_not_promising(conn):
+    """Regression: an older promising eval must not surface a strategy whose
+    *most recent* eval of the same type is non-promising. The filter has to
+    be applied after windowing, not inside the CTE."""
+    _insert_strategy(conn, "h")
+    _insert_evaluation(
+        conn, "h", "fast",
+        evaluated_at="2026-04-28T00:00:00", promising=True, score=10.0,
+    )
+    _insert_evaluation(
+        conn, "h", "fast",
+        evaluated_at="2026-04-30T00:00:00", promising=False, score=0.5,
+    )
+    rows = get_promising_candidates(conn, eval_type="fast")
+    assert rows == []

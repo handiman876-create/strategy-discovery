@@ -380,6 +380,47 @@ def cmd_archive(args) -> int:
     return 0
 
 
+def cmd_reconcile(args) -> int:
+    """Re-derive promising + failed_gates for stored fast evaluations
+    against current scoring logic. canonical/holdout reconciliation is a
+    future enhancement (no rows of those types in the DB today)."""
+    from leaderboard.reconcile import reconcile_evaluations
+
+    conn = initialize_db(args.db)
+    try:
+        summary = reconcile_evaluations(conn, project_root=_ROOT)
+    finally:
+        conn.close()
+
+    if getattr(args, "json", False):
+        _print_json(
+            {
+                "n_reconciled": summary.n_reconciled,
+                "n_unchanged": summary.n_unchanged,
+                "n_skipped": summary.n_skipped,
+                "changes": [
+                    {
+                        "eval_id": ch.eval_id,
+                        "strategy_hash": ch.strategy_hash,
+                        "old_promising": ch.old_promising,
+                        "new_promising": ch.new_promising,
+                        "old_failed_gates": ch.old_failed_gates,
+                        "new_failed_gates": ch.new_failed_gates,
+                    }
+                    for ch in summary.changes
+                ],
+                "skipped": [
+                    {"eval_id": eid, "reason": reason}
+                    for eid, reason in summary.skipped
+                ],
+                "log_path": str(summary.log_path) if summary.log_path else None,
+            }
+        )
+    else:
+        print(summary.render())
+    return 0
+
+
 def cmd_backfill(args) -> int:
     """Walk results/ and import historical generation/eval artifacts as
     leaderboard rows marked imported_from='backfill'. Idempotent on the
@@ -519,6 +560,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_archive.add_argument("hash_prefix")
     p_archive.add_argument("--reason", required=True)
     p_archive.set_defaults(func=cmd_archive)
+
+    p_recon = sub.add_parser(
+        "reconcile",
+        parents=[common],
+        help="Re-classify stored fast evaluations against current scoring logic",
+    )
+    p_recon.set_defaults(func=cmd_reconcile)
 
     p_back = sub.add_parser(
         "backfill",

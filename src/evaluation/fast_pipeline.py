@@ -16,7 +16,8 @@ Real promotion decisions must use `evaluation.pipeline.run_evaluation()`.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+import logging
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Type
@@ -28,10 +29,24 @@ from strategy.base import Strategy
 
 from .leaderboard_hook import record_evaluation_to_leaderboard
 from .pipeline import run_evaluation
-from .scoring import PromiseVerdict, ScoreBreakdown
+from .scoring import MIN_TRADES_FOR_PROMISING, PromiseVerdict, ScoreBreakdown
 from .walkforward import WalkForwardConfig
 
+logger = logging.getLogger(__name__)
+
 FAST_LABEL = "FAST: NON-CANONICAL"
+
+# Minimum OOS trades for a fast score to be trustworthy. Coupled to the
+# canonical promise floor (scoring.MIN_TRADES_FOR_PROMISING) so the two tiers
+# can never drift. Below this, profit factor is dominated by a handful of trades
+# and the bootstrap CI is uninformative: a lucky 1-3 trade spec posts a capped
+# PF=100 -> score=100 and tops a score ranking (observed 2026-07-06, when the
+# three highest-scoring fast rows were all 1-3 trade artifacts). We floor such a
+# spec's fast score to 0 so under-sampled candidates sink instead of leading.
+# NOTE: this floors the *noise* only. Genuinely-sampled specs whose PF later
+# collapses under the 10-symbol canonical walk-forward are canonical's job to
+# reject, not this floor's.
+FAST_MIN_TRADES = MIN_TRADES_FOR_PROMISING
 FAST_SYMBOLS = ["AMD", "NFLX", "SPY", "QQQ", "NVDA"]
 
 
@@ -94,6 +109,21 @@ def run_fast_evaluation(
 
     n_total = sum(s.n_oos_trades for s in canonical.per_symbol)
 
+    # Trade floor: an under-sampled fast eval can post a capped/degenerate PF
+    # (e.g. a single winning trade -> PF=100 -> score=100) and rank above
+    # genuinely-sampled candidates. classify_promise has already marked it
+    # not-promising via the same 30-trade gate; here we additionally floor the
+    # score to 0 so the artifact can't lead a score ranking. Firing is logged
+    # for observability (per the "every safety net is observable" norm).
+    breakdown = canonical.breakdown
+    if n_total < FAST_MIN_TRADES:
+        logger.warning(
+            "fast-screen trade floor fired for %s: n_oos=%d < %d; "
+            "flooring score %.3f -> 0.0 (under-sampled, PF not trustworthy)",
+            canonical.strategy_name, n_total, FAST_MIN_TRADES, breakdown.score,
+        )
+        breakdown = replace(breakdown, score=0.0)
+
     fast = FastEvaluationResult(
         is_fast=True,
         label=FAST_LABEL,
@@ -101,7 +131,7 @@ def run_fast_evaluation(
         symbols=canonical.symbols,
         median_pf=canonical.breakdown.median_pf,
         n_oos_trades_total=n_total,
-        breakdown=canonical.breakdown,
+        breakdown=breakdown,
         verdict=canonical.verdict,
         config=canonical.config,
     )

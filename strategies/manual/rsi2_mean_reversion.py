@@ -11,6 +11,33 @@ Ported for the default settings requested for the SPY benchmark:
     Stop Loss           ATR Multiple, 2.5 × ATR(14)
     Trade Direction     Long Only
 
+EMPIRICAL FINDINGS (2026-07-06 — canonical + holdout evals, on the leaderboard):
+
+  In-sample walk-forward (2021–2024 train/test):
+    * SPY: PF 4.45, 77% win — strong.   QQQ: PF 2.27, 70% win — holds.
+    * GLD: PF 1.92 but bootstrap CI lower <1 — marginal.
+    * TLT: PF 0.46 on only 5 trades — fails / barely trades.
+    Four-symbol basket scored NOT PROMISING (consistency 0.41).
+
+  Out-of-sample HOLDOUT (post-2025-01-01, the true OOS-of-OOS):
+    * SPY: PF 0.84 (net loss).   QQQ: PF 1.24 (marginal).
+    * Both bootstrap CIs straddle 1.0 → NOT PROMISING. The in-sample edge did
+      NOT persist on unseen 2025–2026 data.
+
+  Recommended symbols:  SPY, QQQ — but only as the strategy's in-sample home.
+      NOT deployable live as-is: the edge decayed to breakeven/losing on the
+      post-2025 holdout. Treat as a research result, not a signal.
+  Not recommended:  TLT, GLD (bonds / gold) — barely trades TLT, no reliable
+      edge on GLD.
+
+  Note: the Pine author claims this works BEST on bonds/gold ("symbols that
+  DON'T trend cleanly"). The evidence inverts that. The long-only design + the
+  200-SMA trend filter only buy dips while price is above its 200-day average,
+  so the strategy structurally favors UPTRENDING assets (equity indexes) and
+  cannot trade a downtrending bond market — TLT was in a rate-hike downtrend
+  through 2021–2024, hence ~no trades. It is an equity-index mean-reversion
+  system, not the all-weather bonds/gold system the source describes.
+
 This is a Python Strategy subclass (not a generated StrategySpec) because the
 ATR stop and the N-bar timeout are stateful, per-position exits that the spec
 DSL doesn't express — the same reason CasperStrategy is hand-written. It is

@@ -152,6 +152,112 @@ def record_generation(
     return gen_id
 
 
+def record_manual_strategy(
+    conn: sqlite3.Connection,
+    cls: type,
+    strategy_hash: str,
+    *,
+    imported_from: str = "manual",
+    registered_at: Optional[str] = None,
+) -> int:
+    """Register a hand-written (or externally-ported, e.g. Pine Script) Strategy
+    subclass so its evaluations have a strategies row to reference.
+
+    Hand-written strategies have no StrategySpec, so record_generation (which is
+    typed to a spec) does not apply. This is the single, honest entry point for
+    manual strategies: it upserts the strategies row and inserts one generations
+    row carrying manual sentinels (model_version='manual', prompt_hash=hash),
+    so a manual strategy still shows up in provenance/rollup queries as having
+    'entered' the system at registration time.
+
+    `archetype` and `timeframe` are read from the class (cls.archetype,
+    cls.timeframes[0]) — the same attributes CasperStrategy already declares —
+    so manual strategies group with their generated peers in archetype rollups.
+    `spec_json` holds a marker documenting the manual provenance rather than a
+    fabricated spec.
+
+    Idempotent: re-registering the same class (same source → same hash) updates
+    last_seen_at and bumps generation_count, exactly like a repeated generation.
+
+    Returns the new generations-row id.
+
+    Raises AttributeError with an actionable message if the class does not
+    declare the archetype/timeframes attributes the leaderboard requires."""
+    name = getattr(cls, "name", None) or cls.__name__
+    archetype = getattr(cls, "archetype", None)
+    timeframes = getattr(cls, "timeframes", None)
+    if not archetype:
+        raise AttributeError(
+            f"manual strategy {name!r} must declare a class-level `archetype` "
+            f"to be recorded to the leaderboard"
+        )
+    if not timeframes:
+        raise AttributeError(
+            f"manual strategy {name!r} must declare a non-empty class-level "
+            f"`timeframes` list to be recorded to the leaderboard"
+        )
+    timeframe = timeframes[0]
+    ts = registered_at or _utcnow_iso()
+
+    spec_json = json.dumps(
+        {
+            "manual": True,
+            "class": getattr(cls, "__qualname__", name),
+            "module": getattr(cls, "__module__", None),
+            "source_hash": strategy_hash,
+        },
+        sort_keys=True,
+    )
+
+    logger.debug("recording manual strategy %s (hash %s)", name, strategy_hash)
+    conn.execute("BEGIN")
+    try:
+        # Same upsert shape as record_generation: insert if new, else refresh
+        # last_seen_at and bump generation_count without disturbing status or
+        # the *_at columns. imported_from is set on insert only (a strategy
+        # first seen via generation stays that way even if later re-registered).
+        conn.execute(
+            """
+            INSERT INTO strategies (
+                strategy_hash, name, archetype, timeframe, spec_json,
+                first_generated_at, last_seen_at, generation_count,
+                status, imported_from
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'generated', ?)
+            ON CONFLICT (strategy_hash) DO UPDATE SET
+                last_seen_at = excluded.last_seen_at,
+                generation_count = strategies.generation_count + 1,
+                name = excluded.name,
+                spec_json = excluded.spec_json
+            """,
+            (strategy_hash, name, archetype, timeframe, spec_json, ts, ts, imported_from),
+        )
+
+        cur = conn.execute(
+            """
+            INSERT INTO generations (
+                strategy_hash, generated_at, archetype, requested_timeframe,
+                model_version, prompt_hash, cost_usd, retry_count,
+                duration_seconds,
+                stringification_firings, kwarg_validator_firings,
+                unreachable_default_firings,
+                raw_response_path, spec_path, imported_from
+            ) VALUES (?, ?, ?, ?, 'manual', ?, 0.0, 0, NULL, 0, 0, 0, NULL, NULL, ?)
+            """,
+            (strategy_hash, ts, archetype, None, strategy_hash, imported_from),
+        )
+        gen_id = cur.lastrowid
+        conn.execute("COMMIT")
+    except Exception:
+        try:
+            conn.execute("ROLLBACK")
+        except sqlite3.OperationalError:
+            pass
+        raise
+
+    logger.debug("recorded manual strategy generation id %d", gen_id)
+    return gen_id
+
+
 def record_evaluation(
     conn: sqlite3.Connection,
     strategy_hash: str,

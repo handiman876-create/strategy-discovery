@@ -35,11 +35,16 @@ from evaluation import (
     run_evaluation,
     sp500_with_required,
 )
+from generator.dedup import compute_manual_strategy_hash
+from leaderboard.db import initialize_db
+from leaderboard.record import record_manual_strategy
 from manual.casper import CasperStrategy
+from manual.rsi2_mean_reversion import Rsi2MeanReversion
 from strategy.base import Strategy
 
 STRATEGY_REGISTRY: dict[str, Type[Strategy]] = {
     "casper": CasperStrategy,
+    "rsi2_mr": Rsi2MeanReversion,
 }
 
 # Named parameter grids per strategy. Keep these here so the eval CLI can
@@ -80,6 +85,12 @@ def main() -> int:
     parser.add_argument("--train-months", type=int, default=24)
     parser.add_argument("--test-months", type=int, default=6)
     parser.add_argument("--step-months", type=int, default=6)
+    parser.add_argument(
+        "--no-leaderboard",
+        action="store_true",
+        help="Skip recording this evaluation to the leaderboard DB "
+        "(by default the strategy is registered as 'manual' and its eval is recorded).",
+    )
     args = parser.parse_args()
 
     load_dotenv(_ROOT / ".env", override=True)
@@ -122,17 +133,37 @@ def main() -> int:
     print(f"  Baseline   : m={args.m_baseline} seed={args.baseline_seed}")
     print(f"{'='*60}\n")
 
-    result = run_evaluation(
-        STRATEGY_REGISTRY[args.strategy],
-        symbols=symbols,
-        backtest_config=backtest_cfg,
-        walk_config=walk_cfg,
-        n_bootstrap=args.n_bootstrap,
-        m_baseline=args.m_baseline,
-        bootstrap_seed=args.bootstrap_seed,
-        baseline_seed=args.baseline_seed,
-        output_root=Path(args.output_root),
-    )
+    strategy_class = STRATEGY_REGISTRY[args.strategy]
+
+    # Register the strategy on the leaderboard so its evaluation is recorded.
+    # Manual strategies have no StrategySpec, so we hash the class source and
+    # register via record_manual_strategy — this creates the strategies row the
+    # eval-recording FK requires, then run_evaluation records the eval itself.
+    conn = None
+    strategy_hash = None
+    if not args.no_leaderboard:
+        conn = initialize_db()
+        strategy_hash = compute_manual_strategy_hash(strategy_class)
+        record_manual_strategy(conn, strategy_class, strategy_hash)
+        print(f"  Leaderboard: recording as manual (hash {strategy_hash[:12]})\n")
+
+    try:
+        result = run_evaluation(
+            strategy_class,
+            symbols=symbols,
+            backtest_config=backtest_cfg,
+            walk_config=walk_cfg,
+            n_bootstrap=args.n_bootstrap,
+            m_baseline=args.m_baseline,
+            bootstrap_seed=args.bootstrap_seed,
+            baseline_seed=args.baseline_seed,
+            output_root=Path(args.output_root),
+            conn=conn,
+            strategy_hash=strategy_hash,
+        )
+    finally:
+        if conn is not None:
+            conn.close()
 
     _print_summary(result)
     return 0

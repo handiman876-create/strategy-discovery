@@ -149,3 +149,38 @@ Structural hashing has its own properties worth tracking:
   * **No behavioral equivalence.** Two structurally different specs that happen to produce identical trade lists are now distinct in the leaderboard. With behavioral hashing they would have collapsed; with structural hashing they don't. This may be the correct answer (different specs are different strategies) or a regression in equivalence-detection — it depends on the use case. Worth observing in practice before deciding whether to add a complementary trade-fingerprint hash as a secondary dedup signal.
 
 **Trigger for action:** if alias-variation noise or operator-asymmetry collisions become observable in leaderboard queries, prioritize a Phase 5 follow-up. Otherwise this section can be retired after a stretch of clean operation under the new hash.
+
+## Random baseline is intraday-specific — degenerate on daily timeframes
+
+**Observed (2026-07-06):** During the SPY canonical eval of the hand-ported
+`Rsi2MeanReversion` (a 1d strategy), `random_baseline` returned PF=0.0 for all
+200 trials (`baseline_pf` column uniformly 0.0), giving `baseline_p_value=0.0`
+and `median_baseline_pf=0.0`. The p-value technically reads "beats 100% of
+random trials," but it is **uninformative** — the baseline never generated a
+profitable random trade because it can't generate a valid trade at all on daily
+bars.
+
+**Root cause:** `src/evaluation/significance.py` (`random_baseline` /
+`_simulate_random_trade`, see module docstring lines ~16–17) is hard-wired to
+Casper's *intraday* mechanics: it places random entries with an
+"opposite-bracket stop on that session's opening range (first 5-min bar's
+high/low), target at risk × rr_ratio." On a daily strategy there is no
+intraday opening range / first-5-min bar, so the OR-derived stop is degenerate
+(risk ≤ 0 → no valid bracket → `profit_factor([]) == 0.0`), for every trial.
+
+**Impact:** the "vs random baseline" significance leg is meaningless for any
+non-intraday strategy. The bootstrap CI is unaffected and remains the trustworthy
+significance signal (RSI-2 SPY: PF 4.45, CI lower bound 2.23 > 1). But the
+significance_factor / aggregate_p_value derived from the baseline should not be
+trusted for daily strategies, and any future daily strategy will hit this.
+
+**Direction when prioritized:** make the random baseline timeframe-aware. Options:
+  * A daily-appropriate random-entry model: random entry on a bar, exit after a
+    holding period drawn from the strategy's realized hold distribution (or a
+    fixed N-bar hold), with an ATR- or percent-based stop rather than an
+    opening-range bracket.
+  * Or dispatch on `backtest_config.is_intraday`: keep the OR-bracket baseline
+    for intraday strategies, use the holding-period model for daily-or-coarser.
+  * Guard: if the baseline produces zero valid trades across all trials, surface
+    a warning and drop the significance leg rather than reporting a spurious
+    p=0.000 (loud-fail-on-degenerate, per the observability convention).

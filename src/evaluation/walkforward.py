@@ -108,6 +108,12 @@ def walk_forward(
     windows = _enumerate_windows(span_start, span_end_excl, config)
     grid = _expand_grid(config.parameter_grid)
 
+    # Indicator warmup for the OOS backtest. The context retains at most
+    # context_lookback bars, so prepending that many strictly-historical bars
+    # before each test window fully initializes any indicator the context can
+    # serve (e.g. a 200-bar MA) at the window's first OOS bar.
+    warmup_bars = getattr(backtest_config, "context_lookback", 0) or 0
+
     result = WalkForwardResult(symbol=symbol, config=config)
 
     for train_start, train_end, test_start, test_end in windows:
@@ -129,7 +135,13 @@ def walk_forward(
             )
 
         test_strat = strategy_factory(**best_params)
-        test_res = run_backtest(symbol, test_bars, test_strat, backtest_config)
+        # Prepend indicator warmup so long-lookback indicators are initialized
+        # at the first OOS bar rather than returning None for the whole window.
+        # Warmup bars feed the context only; trades entered before test_start
+        # are dropped by _oos_only, so this adds no look-ahead to the OOS signal.
+        test_input = _prepend_warmup(bars, test_bars, test_start, warmup_bars)
+        test_res = run_backtest(symbol, test_input, test_strat, backtest_config)
+        oos_trades = _oos_only(test_res.trades, test_start, bars["timestamp"].dt.tz)
 
         result.windows.append(
             WindowResult(
@@ -140,9 +152,9 @@ def walk_forward(
                 best_params=best_params,
                 train_pf=train_pf,
                 train_n_trades=train_n,
-                test_trades=list(test_res.trades),
-                test_pf=_pf(test_res.trades),
-                test_n_trades=len(test_res.trades),
+                test_trades=oos_trades,
+                test_pf=_pf(oos_trades),
+                test_n_trades=len(oos_trades),
             )
         )
 
@@ -150,6 +162,35 @@ def walk_forward(
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
+
+
+def _prepend_warmup(
+    all_bars: pd.DataFrame,
+    test_bars: pd.DataFrame,
+    test_start: date,
+    warmup_bars: int,
+) -> pd.DataFrame:
+    """Return `test_bars` with up to `warmup_bars` strictly-historical bars
+    (timestamp < test_start) prepended, for indicator warmup. No look-ahead:
+    every prepended bar predates the OOS window, and trades opened during warmup
+    are excluded downstream by `_oos_only`. Falls back to `test_bars` unchanged
+    when warmup is disabled or no prior history exists (early windows)."""
+    if warmup_bars <= 0:
+        return test_bars
+    tz = all_bars["timestamp"].dt.tz
+    s = pd.Timestamp(test_start, tz=tz)
+    hist = all_bars[all_bars["timestamp"] < s].tail(warmup_bars)
+    if hist.empty:
+        return test_bars
+    return pd.concat([hist, test_bars], ignore_index=True)
+
+
+def _oos_only(trades: list[Trade], test_start: date, tz: Any) -> list[Trade]:
+    """Keep only trades entered on/after test_start, mirroring slice_window's
+    [test_start, test_end) lower bound. Drops warmup-window entries so the OOS
+    signal contains exactly the in-window trades."""
+    s = pd.Timestamp(test_start, tz=tz)
+    return [t for t in trades if pd.Timestamp(t.entry_time) >= s]
 
 
 def _add_months(d: date, months: int) -> date:

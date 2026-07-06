@@ -50,6 +50,7 @@ Field-level decisions:
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 from typing import Any
 
@@ -128,6 +129,47 @@ def compute_strategy_hash(spec: "StrategySpec | dict") -> str:
     canonical = _canonicalize_spec(spec_dict)
     payload = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(payload).hexdigest()
+
+
+# ── Manual (hand-written) strategy hashing ───────────────────────────────────
+
+# Domain separator mixed into the manual-hash preimage. Keeps the output a
+# plain 64-hex SHA-256 (so every hash column stays uniform) while guaranteeing
+# a manual hash can never collide with a compute_strategy_hash spec hash: the
+# two functions hash disjoint preimage domains. Bump the version suffix only if
+# the manual-hash *definition* changes (which would legitimately re-identify
+# every manual strategy).
+_MANUAL_HASH_DOMAIN = b"manual-strategy:v1\n"
+
+
+def compute_manual_strategy_hash(cls: type) -> str:
+    """SHA-256 identity hash for a hand-written Strategy subclass.
+
+    Hand-written strategies (e.g. CasperStrategy, or a Pine Script port) have
+    no StrategySpec, so compute_strategy_hash does not apply. Their identity is
+    their source code: we hash inspect.getsource(cls) under a domain separator.
+
+    Consequences, all intended:
+      * Editing the class body changes the hash — an edited strategy is a new
+        strategy, mirroring how a changed spec changes compute_strategy_hash.
+      * Two textually identical classes hash the same (re-imports are idempotent
+        via the strategies-table upsert).
+      * Whitespace/comment edits DO change the hash. Source is the identity; we
+        do not normalize. If that proves noisy, revisit — but per the same
+        loud-over-silent stance as compute_strategy_hash, we start strict.
+
+    Raises TypeError if cls has no retrievable source (e.g. a C-defined or
+    dynamically-exec'd class) — callers should surface that rather than
+    fabricate an identity.
+    """
+    try:
+        source = inspect.getsource(cls)
+    except (OSError, TypeError) as e:
+        raise TypeError(
+            f"cannot hash manual strategy {getattr(cls, '__name__', cls)!r}: "
+            f"source unavailable ({e})"
+        ) from e
+    return hashlib.sha256(_MANUAL_HASH_DOMAIN + source.encode()).hexdigest()
 
 
 def _canonicalize_spec(spec_dict: dict) -> dict:

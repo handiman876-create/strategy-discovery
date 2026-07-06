@@ -43,6 +43,7 @@ from .pipeline import (
     EvaluationResult,
     SymbolEvaluation,
     run_evaluation,
+    run_holdout_evaluation,
 )
 from .fast_pipeline import (
     FAST_LABEL,

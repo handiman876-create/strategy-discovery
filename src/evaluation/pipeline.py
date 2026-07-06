@@ -19,7 +19,7 @@ from typing import Any, Callable, Type
 
 import pandas as pd
 
-from engine.backtester import BacktestConfig
+from engine.backtester import BacktestConfig, run_backtest
 from engine.portfolio import Trade
 from strategy.base import Strategy
 
@@ -38,7 +38,7 @@ from .significance import (
     random_baseline,
     trade_count_warning,
 )
-from .splits import train_test_load
+from .splits import HOLDOUT_BOUNDARY, holdout_load, train_test_load
 from .walkforward import (
     WalkForwardConfig,
     WalkForwardResult,
@@ -149,6 +149,148 @@ def run_evaluation(
             )
         )
 
+    cfg_dict = {
+        "strategy": strategy_name,
+        "symbols": symbols,
+        "walk_config": dataclasses.asdict(walk_config),
+        "backtest_config": _backtest_cfg_to_dict(backtest_config),
+        "n_bootstrap": n_bootstrap,
+        "m_baseline": m_baseline,
+    }
+
+    return _finalize(
+        strategy_name=strategy_name,
+        symbols=symbols,
+        per_symbol=per_symbol,
+        num_parameters=_count_grid_dims(walk_config.parameter_grid),
+        config=cfg_dict,
+        eval_type="canonical",
+        output_root=output_root,
+        conn=conn,
+        strategy_hash=strategy_hash,
+    )
+
+
+def run_holdout_evaluation(
+    strategy_class: Type[Strategy],
+    *,
+    symbols: list[str],
+    backtest_config: BacktestConfig,
+    n_bootstrap: int = 5000,
+    bootstrap_seed: int = 0,
+    m_baseline: int = 200,
+    baseline_seed: int = 0,
+    output_root: Path | None = None,
+    strategy_factory: Callable[..., Strategy] | None = None,
+    conn: Any = None,
+    strategy_hash: str | None = None,
+) -> EvaluationResult:
+    """Final holdout evaluation — the post-HOLDOUT_BOUNDARY out-of-sample-of-sample
+    gate that comes AFTER walk-forward optimization (run_evaluation) is complete.
+
+    No walk-forward and no optimization: the strategy runs with its deployment
+    (default-constructor) parameters on the sealed holdout slice, warmed up with
+    the tail of the (non-holdout) train span so long-lookback indicators
+    initialize at the first holdout bar. Only trades entered on/after the holdout
+    boundary are counted — the warmup bars feed indicators only, no look-ahead.
+
+    Loads holdout via holdout_load(final_scoring=True); MUST NOT be called inside
+    optimization_mode() (holdout_load will refuse). Records eval_type='holdout',
+    which auto-advances the strategy's leaderboard status to holdout_evaluated.
+    Scoring, verdict, report, and leaderboard write are shared with run_evaluation
+    via _finalize."""
+    strategy_factory = strategy_factory or strategy_class
+    strategy_name = strategy_class.__name__
+
+    declared = list(getattr(strategy_class, "timeframes", None) or [])
+    if len(declared) != 1:
+        raise ValueError(
+            f"{strategy_name}: holdout eval supports a single declared timeframe "
+            f"per strategy; got timeframes={declared}."
+        )
+    bar_timeframe = declared[0]
+    backtest_config = dataclasses.replace(backtest_config, bar_timeframe=bar_timeframe)
+    warmup = max(backtest_config.context_lookback, 0)
+
+    per_symbol: list[SymbolEvaluation] = []
+    for sym in symbols:
+        warm = train_test_load(sym, target_timeframe=bar_timeframe).tail(warmup)
+        hold = holdout_load(sym, final_scoring=True, target_timeframe=bar_timeframe)
+        boundary = pd.Timestamp(HOLDOUT_BOUNDARY, tz=hold["timestamp"].dt.tz)
+        full = pd.concat([warm, hold], ignore_index=True) if not warm.empty else hold
+
+        res = run_backtest(sym, full, strategy_factory(), backtest_config)
+        oos = [t for t in res.trades if pd.Timestamp(t.entry_time) >= boundary]
+
+        boot = bootstrap_profit_factor(oos, n_resamples=n_bootstrap, seed=bootstrap_seed)
+        baseline = random_baseline(
+            hold,
+            oos,
+            rr_ratio=_extract_rr(strategy_factory),
+            m_trials=m_baseline,
+            seed=baseline_seed,
+            slippage=backtest_config.slippage,
+            realistic_fills=backtest_config.realistic_fills,
+        )
+        warnings = []
+        warn = trade_count_warning(len(oos))
+        if warn:
+            warnings.append(warn)
+
+        per_symbol.append(
+            SymbolEvaluation(
+                symbol=sym,
+                n_oos_trades=len(oos),
+                pf=profit_factor([t.pnl for t in oos]),
+                bootstrap=boot,
+                baseline=baseline,
+                # No walk-forward in a holdout run; an empty result keeps the
+                # SymbolEvaluation shape uniform for _write_report / adapters.
+                walk_forward=WalkForwardResult(symbol=sym, config=WalkForwardConfig()),
+                warnings=warnings,
+            )
+        )
+
+    cfg_dict = {
+        "strategy": strategy_name,
+        "symbols": symbols,
+        "eval": "holdout",
+        "holdout_boundary": str(HOLDOUT_BOUNDARY),
+        "warmup_bars": warmup,
+        "backtest_config": _backtest_cfg_to_dict(backtest_config),
+        "n_bootstrap": n_bootstrap,
+        "m_baseline": m_baseline,
+    }
+
+    return _finalize(
+        strategy_name=strategy_name,
+        symbols=symbols,
+        per_symbol=per_symbol,
+        num_parameters=0,  # holdout runs deployment params — no grid search
+        config=cfg_dict,
+        eval_type="holdout",
+        output_root=output_root,
+        conn=conn,
+        strategy_hash=strategy_hash,
+    )
+
+
+def _finalize(
+    *,
+    strategy_name: str,
+    symbols: list[str],
+    per_symbol: list[SymbolEvaluation],
+    num_parameters: int,
+    config: dict[str, Any],
+    eval_type: str,
+    output_root: Path | None,
+    conn: Any,
+    strategy_hash: str | None,
+) -> EvaluationResult:
+    """Shared scoring → report → leaderboard-record tail for the walk-forward
+    (run_evaluation) and holdout (run_holdout_evaluation) paths. Centralized so
+    the aggregate scoring, verdict, report artifacts, and leaderboard write are
+    defined exactly once and the two eval tiers can never drift apart."""
     # Aggregate metrics for scoring.
     n_oos_total = sum(s.n_oos_trades for s in per_symbol)
     pfs = [s.pf for s in per_symbol if s.n_oos_trades > 0]
@@ -162,7 +304,6 @@ def run_evaluation(
         # → just take the median for simplicity in Phase 2.
         ps = [s.baseline.p_value for s in per_symbol if s.n_oos_trades > 0]
         agg_p = float(pd.Series(ps).median()) if ps else 1.0
-        num_parameters = _count_grid_dims(walk_config.parameter_grid)
         breakdown = compute_robustness_score(pfs, num_parameters, agg_p)
 
         # Aggregate CI: median of per-symbol CI_lower values (conservative).
@@ -172,22 +313,13 @@ def run_evaluation(
             breakdown, ci_lower=ci_lower_agg, n_oos_trades_total=n_oos_total
         )
 
-    cfg_dict = {
-        "strategy": strategy_name,
-        "symbols": symbols,
-        "walk_config": dataclasses.asdict(walk_config),
-        "backtest_config": _backtest_cfg_to_dict(backtest_config),
-        "n_bootstrap": n_bootstrap,
-        "m_baseline": m_baseline,
-    }
-
     result = EvaluationResult(
         strategy_name=strategy_name,
         symbols=symbols,
         per_symbol=per_symbol,
         breakdown=breakdown,
         verdict=verdict,
-        config=cfg_dict,
+        config=config,
         aggregate_p_value=agg_p,
     )
 
@@ -198,7 +330,7 @@ def run_evaluation(
         pipeline_result=result,
         conn=conn,
         strategy_hash=strategy_hash,
-        eval_type="canonical",
+        eval_type=eval_type,
     )
 
     return result

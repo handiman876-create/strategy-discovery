@@ -33,6 +33,7 @@ from evaluation import (
     WalkForwardConfig,
     load_symbol_list,
     run_evaluation,
+    run_holdout_evaluation,
     sp500_with_required,
 )
 from generator.dedup import compute_manual_strategy_hash
@@ -91,6 +92,14 @@ def main() -> int:
         help="Skip recording this evaluation to the leaderboard DB "
         "(by default the strategy is registered as 'manual' and its eval is recorded).",
     )
+    parser.add_argument(
+        "--holdout",
+        action="store_true",
+        help="Run the FINAL holdout eval (post-2025 out-of-sample-of-sample) "
+        "instead of the walk-forward canonical eval. Loads the sealed holdout "
+        "slice, runs deployment (default) params warmed up from the train tail, "
+        "and records eval_type='holdout'. Ignores --grid / walk-forward window flags.",
+    )
     args = parser.parse_args()
 
     load_dotenv(_ROOT / ".env", override=True)
@@ -148,19 +157,35 @@ def main() -> int:
         print(f"  Leaderboard: recording as manual (hash {strategy_hash[:12]})\n")
 
     try:
-        result = run_evaluation(
-            strategy_class,
-            symbols=symbols,
-            backtest_config=backtest_cfg,
-            walk_config=walk_cfg,
-            n_bootstrap=args.n_bootstrap,
-            m_baseline=args.m_baseline,
-            bootstrap_seed=args.bootstrap_seed,
-            baseline_seed=args.baseline_seed,
-            output_root=Path(args.output_root),
-            conn=conn,
-            strategy_hash=strategy_hash,
-        )
+        if args.holdout:
+            print("  Mode       : HOLDOUT (post-2025 OOS-of-OOS; deployment params, "
+                  "grid/walk-forward flags ignored)\n")
+            result = run_holdout_evaluation(
+                strategy_class,
+                symbols=symbols,
+                backtest_config=backtest_cfg,
+                n_bootstrap=args.n_bootstrap,
+                m_baseline=args.m_baseline,
+                bootstrap_seed=args.bootstrap_seed,
+                baseline_seed=args.baseline_seed,
+                output_root=Path(args.output_root),
+                conn=conn,
+                strategy_hash=strategy_hash,
+            )
+        else:
+            result = run_evaluation(
+                strategy_class,
+                symbols=symbols,
+                backtest_config=backtest_cfg,
+                walk_config=walk_cfg,
+                n_bootstrap=args.n_bootstrap,
+                m_baseline=args.m_baseline,
+                bootstrap_seed=args.bootstrap_seed,
+                baseline_seed=args.baseline_seed,
+                output_root=Path(args.output_root),
+                conn=conn,
+                strategy_hash=strategy_hash,
+            )
     finally:
         if conn is not None:
             conn.close()

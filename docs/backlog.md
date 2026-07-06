@@ -184,3 +184,27 @@ trusted for daily strategies, and any future daily strategy will hit this.
   * Guard: if the baseline produces zero valid trades across all trials, surface
     a warning and drop the significance leg rather than reporting a spurious
     p=0.000 (loud-fail-on-degenerate, per the observability convention).
+
+## Fast-screen trade floor fires to a log line — no persistent counter yet
+
+**Added (2026-07-06):** `run_fast_evaluation` now floors an under-sampled fast
+eval's robustness score to 0.0 when total OOS trades < `FAST_MIN_TRADES`
+(= `MIN_TRADES_FOR_PROMISING`, 30). This stops 1-3 trade artifacts (capped
+PF=100 → score ~100) from topping a score ranking. See
+`src/evaluation/fast_pipeline.py` and `tests/unit/test_fast_trade_floor.py`.
+
+**Gap vs. the observability convention:** every other safety net in this project
+carries a *persistent firing counter* (e.g. `stringification_firings`,
+`kwarg_validator_firings`, `unreachable_default_firings` on the `generations`
+table) so we can tell whether it is still earning its keep and drive its
+detection → maturity → decision lifecycle. The trade floor currently only emits
+a WARNING log when it fires — greppable, but not queryable and not durable.
+
+**Direction when prioritized:** add a persistent counter for floor firings.
+Likely a `fast_trade_floor_firings` column on the `evaluations` table (small
+schema migration + wire-through in the leaderboard record path), mirroring the
+generation-side counters. Then the floor can be reviewed like the other
+counter-bearing validators: if it rarely fires once the fast screen stops
+surfacing degenerate specs, decide whether to keep, retune the threshold, or
+retire it. Deferred deliberately on 2026-07-06 to avoid a schema migration
+mid-session; the log line is the interim signal.

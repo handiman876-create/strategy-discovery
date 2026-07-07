@@ -240,3 +240,62 @@ is still translated and evaluated.
     (`retry_feedback`) so the model self-corrects instead of emitting a dead
     spec. Weigh AND/OR context so a benign unreachable OR-branch doesn't
     over-reject an otherwise-valid spec.
+
+## Generation-time signal-frequency floor — reject empirically-zero-trade specs
+
+**Observed (2026-07-06/07, autodiscover runs 1 & 2):** ~23.5% (4/17 both runs)
+of generated specs produce **empirically zero OOS trades**. After the percent_rank
+fix (commit 8a7256c) removed the statically-unsatisfiable cases, this became the
+dominant yield leak — each dead spec still costs a full 5-symbol fast eval and
+leaves a dead leaderboard row. Examples: run2 CAND 6/11/16/17 (0 trades, no
+warnings — the static unreachable-detector cannot see them).
+
+**Root cause:** the entry condition is *empirically* almost-never satisfied,
+though not mathematically unsatisfiable. Two sub-causes, both already surfaced by
+`diagnose_signal_frequency` (`src/evaluation/diagnostics.py`):
+  * `warm_ratio ≈ 0` — timeframe/session mismatch (e.g. a 200-period indicator on
+    intraday bars never warms within a session), so indicators are never ready.
+  * `ratio_full_to_min_clause ≈ 0` — an over-restrictive AND whose clauses rarely
+    co-occur, so the full entry (`full_hits`) fires ~0 times.
+These pass `validate_for_translation` (spec-only, static) and fast eval, wasting
+compute.
+
+**Proposed fix — wire `diagnose_signal_frequency` into the generation gate:**
+`diagnose_signal_frequency(strategy_class, symbol)` already returns per-side
+`full_hits`, `n_evaluable_bars`, `warm_ratio`, `ratio_full_to_min_clause` and is
+cheap (single-symbol indicator walk, no backtest/bootstrap). Currently it only
+runs *post-hoc* in `fast_pipeline._run_signal_frequency_diag` when
+`n_oos_trades_total < DIAGNOSE_BELOW_TRADES` (10). Instead, run it as a **gate in
+`generate_and_translate`** (after `translate_to_file` + class import, before
+returning): probe ONE symbol (e.g. SPY, or the first canonical symbol) and if the
+declared long/short side's `full_hits` is below a small floor (e.g. `< 3`, tune
+at impl) OR `warm_ratio == 0`, raise so the existing `generate_strategy` retry
+loop feeds a specific reason back as `retry_feedback` ("entry fires 0× on SPY
+over <window>: clauses rarely co-occur / indicators never warm — loosen the
+entry"). The model self-corrects instead of shipping a dead spec.
+
+NOTE: unlike the percent_rank check, this needs the translated CLASS + data, so
+it lives in `pipeline.py` (post-translation), NOT in `validate_for_translation`
+(pre-translation, spec-only).
+
+**Expected yield improvement:** converts the ~1/4-of-batch zero-trade specs into
+either a self-corrected firing spec (via retry) or an honest gen-fail — either
+way no wasted fast eval and no dead leaderboard row. Should push the
+zero-trade-reaching-fast-eval rate from ~23% toward ~0 and modestly increase the
+count of candidates clearing the fast gate (trades>30 & score>1.5). Does NOT
+change the base rate of edges surviving canonical — it removes dead weight, not a
+magic source of alpha.
+
+**Files to change:**
+  * `src/generator/pipeline.py` — add the probe+gate in `generate_and_translate`
+    (raise a retry-triggering error on failure; thread the reason into
+    `retry_feedback`). This is the primary change.
+  * `src/evaluation/diagnostics.py` — reuse `diagnose_signal_frequency` as-is, or
+    add a thin `entry_fires_enough(cls, symbol) -> (bool, reason)` wrapper.
+  * Config constant for the `full_hits` floor + probe symbol (near the other
+    generation constants).
+  * Observability: a firing counter (mirror `unreachable_default_firings` etc. on
+    the `generations` table) so we can track how often the floor fires — per the
+    "every safety net is observable" norm.
+  * Tests: `tests/unit/` — a spec whose entry never fires triggers the gate/retry;
+    a normally-firing spec passes untouched.

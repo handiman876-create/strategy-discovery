@@ -16,6 +16,7 @@ from generator.translator import (
     TranslationError,
     scan_unreachable_defaults,
     translate_to_file,
+    validate_for_translation,
 )
 
 
@@ -345,23 +346,72 @@ def test_unreachable_detector_skips_under_not():
     assert scan_unreachable_defaults(spec) == []
 
 
-def test_translate_to_file_warns_but_does_not_raise(monkeypatch, tmp_path, caplog):
-    """End-to-end: an unreachable clause causes a logger.warning + a quirks
-    file row, but translate_to_file must NOT raise. Quirk file is redirected
-    to tmp_path to keep the test hermetic."""
+def test_validate_rejects_unreachable_percent_rank_entry():
+    """Layer-2 fix: an entry clause comparing percent_rank (range [0, 1]) to a
+    0-100-style threshold is unsatisfiable, so validate_for_translation must
+    RAISE TranslationError (driving a generation retry) rather than warn-only —
+    the strategy could never enter a position."""
+    spec = _spec_with_entry_long(
+        name="unreachable_prank_entry",
+        parameters=[ParameterSpec(name="prank_threshold", type="float", default=65.0)],
+        indicators=[IndicatorSpec(name="prank", type="percent_rank", params={"period": 60})],
+        entry_long={
+            "op": "compare", "operator": ">",
+            "lhs": {"op": "indicator", "name": "prank"},
+            "rhs": {"op": "param", "name": "prank_threshold"},
+        },
+    )
+    with pytest.raises(TranslationError, match="never enter"):
+        validate_for_translation(spec)
+
+
+def test_validate_accepts_fractional_percent_rank_entry():
+    """The same clause with a fractional threshold (0.9, within [0, 1]) is
+    satisfiable and must pass validation without raising."""
+    spec = _spec_with_entry_long(
+        name="reachable_prank_entry",
+        parameters=[ParameterSpec(name="prank_threshold", type="float", default=0.9)],
+        indicators=[IndicatorSpec(name="prank", type="percent_rank", params={"period": 60})],
+        entry_long={
+            "op": "compare", "operator": ">",
+            "lhs": {"op": "indicator", "name": "prank"},
+            "rhs": {"op": "param", "name": "prank_threshold"},
+        },
+    )
+    validate_for_translation(spec)  # must not raise
+
+
+def test_translate_to_file_warns_but_does_not_raise_on_exit_clause(monkeypatch, tmp_path, caplog):
+    """End-to-end: an unreachable clause in an EXIT field causes a
+    logger.warning + a quirks file row, but translate_to_file must NOT raise —
+    a dead exit falls back to stops / other exit paths. (Entry-field unreachable
+    clauses DO raise; see test_validate_rejects_unreachable_percent_rank_entry.)
+    Quirk file is redirected to tmp_path to keep the test hermetic."""
     import generator.translator as tr
 
     quirks_path = tmp_path / "generation_quirks.json"
     monkeypatch.setattr(tr, "_QUIRKS_PATH", quirks_path)
 
-    spec = _spec_with_entry_long(
+    spec = StrategySpec(
         name="warn_only_no_raise",
-        parameters=[ParameterSpec(name="rsi_threshold", type="float", default=110.0)],
+        archetype="mean_reversion",
+        thesis="Exit-field unreachable clause is the unit under test.",
+        supported_assets=["stocks"],
+        timeframes=["1d"],
+        parameters=[
+            ParameterSpec(name="rsi_entry", type="float", default=30.0),
+            ParameterSpec(name="rsi_exit", type="float", default=110.0),
+        ],
         indicators=[IndicatorSpec(name="rsi_14", type="rsi", params={"period": 14})],
         entry_long={
+            "op": "compare", "operator": "<",
+            "lhs": {"op": "indicator", "name": "rsi_14"},
+            "rhs": {"op": "param", "name": "rsi_entry"},
+        },
+        exit_long={
             "op": "compare", "operator": ">",
             "lhs": {"op": "indicator", "name": "rsi_14"},
-            "rhs": {"op": "param", "name": "rsi_threshold"},
+            "rhs": {"op": "param", "name": "rsi_exit"},
         },
     )
 
@@ -381,6 +431,6 @@ def test_translate_to_file_warns_but_does_not_raise(monkeypatch, tmp_path, caplo
     assert rec["by_indicator"]["rsi"] == 1
     assert len(rec["examples"]) == 1
     ex = rec["examples"][0]
-    assert ex["param_name"] == "rsi_threshold"
+    assert ex["param_name"] == "rsi_exit"
     assert ex["param_default"] == 110.0
     assert ex["indicator_range"] == [0.0, 100.0]

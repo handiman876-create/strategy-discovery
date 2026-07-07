@@ -20,6 +20,9 @@ Hard rules:
   - ✗ `bb_upper(period=20, std=2.0)` — `k`, not `std`
 
   Function-call form is shown for clarity. In JSON you write each indicator as `{"type": "bb_upper", "params": {"period": 20, "k": 2.0}}`.
+- `percent_rank(period=252)` returns a **fraction in [0, 1]** (0 = lowest in the lookback window, 1 = highest), **not** a 0–100 percentile. Compare it against fractional thresholds:
+  - ✓ `percent_rank(period=60) > 0.9` (close near the 60-bar high)
+  - ✗ `percent_rank(period=60) > 90` — always false; the value never exceeds 1.0
 - `daily_return` is only valid when the strategy's timeframes contain only `1d` (no intraday).
 - Parameter count ≤ 5; indicator count ≤ 4. Stay simple — fewer parameters is better.
 - No look-ahead. The DSL does not expose future bars; do not propose constructs that would need them.

@@ -208,3 +208,35 @@ counter-bearing validators: if it rarely fires once the fast screen stops
 surfacing degenerate specs, decide whether to keep, retune the threshold, or
 retire it. Deferred deliberately on 2026-07-06 to avoid a schema migration
 mid-session; the log line is the interim signal.
+
+## percent_rank scale confusion — model emits unsatisfiable thresholds
+
+**Observed (2026-07-06, autodiscover run 1):** roughly 1/3 of an 18-candidate
+batch produced non-firing or near-non-firing strategies. Two tripped explicit
+unreachable-default warnings — `percent_rank(prank_126) > 75.0` (momentum) and
+`percent_rank(prank) > 65.0` (microstructure) — and several more produced 0
+trades from the same root cause, wasting the generation + fast eval.
+
+**Root cause:** `percent_rank` outputs a fraction in **[0, 1]**
+(`INDICATOR_RANGES`, `src/generator/indicators.py`), but the model treats it like
+a 0-100 oscillator (RSI-style) and emits thresholds such as 65/75. Any
+`percent_rank(x) > 65` is always false → the entry never fires → dead strategy.
+The `_system.md` indicator catalog lists `percent_rank(period=252)` with **no
+range annotation**, so archetypes whose own prompt lacks a correct [0,1] example
+(momentum, microstructure) get it wrong; `volatility_breakout.md`, which shows
+`> 0.95`, gets it right.
+
+**Existing safety net is warn-only:** `scan_unreachable_defaults`
+(`src/generator/translator.py`) already DETECTS these clauses and records a quirk
+counter, but only logs a WARNING — it does not reject or repair, so the dead spec
+is still translated and evaluated.
+
+**Direction — two complementary layers:**
+  * **Prompt (prevention):** annotate `percent_rank`'s [0,1] range in the
+    `_system.md` catalog so every archetype learns it at the source.
+  * **Validator (enforcement):** call `scan_unreachable_defaults` inside
+    `validate_for_translation` so an unsatisfiable clause raises
+    `TranslationError`, feeding the existing `generate_strategy` retry loop
+    (`retry_feedback`) so the model self-corrects instead of emitting a dead
+    spec. Weigh AND/OR context so a benign unreachable OR-branch doesn't
+    over-reject an otherwise-valid spec.

@@ -103,7 +103,9 @@ def _record_kwargs_quirk(indicator: str, extra: list[str], missing: list[str]) -
 @dataclass(frozen=True)
 class UnreachableFinding:
     """One Compare clause whose use of a parameter default makes it unsatisfiable
-    given the indicator's known range. Warn-only — never blocks translation."""
+    given the indicator's known range. Entry-field findings block translation
+    (validate_for_translation raises, driving a generation retry); exit-field
+    findings remain warn-only."""
 
     label: str  # which DSL field: "entry_long" / "entry_short" / "exit_long" / "exit_short"
     indicator_alias: str
@@ -349,6 +351,24 @@ def validate_for_translation(spec: StrategySpec) -> None:
         if ind.type not in ALLOWED_INDICATORS:
             raise TranslationError(f"indicator type {ind.type!r} not in allowed set")
         _validate_indicator_kwargs(ind.type, ind.params)
+
+    # An unsatisfiable clause in an ENTRY field means the strategy can never open
+    # a position — a dead spec (e.g. `percent_rank(x) > 65` when percent_rank is
+    # in [0, 1]). Reject so the generate_strategy retry loop feeds the reason back
+    # as retry_feedback and the model self-corrects, instead of translating a
+    # non-firing strategy. Exit-field findings stay warn-only (see
+    # translate_to_file): a dead exit clause just falls back to stops / other
+    # exit paths and doesn't kill the strategy outright.
+    entry_unreachable = [
+        f for f in scan_unreachable_defaults(spec)
+        if f.label in ("entry_long", "entry_short")
+    ]
+    if entry_unreachable:
+        details = "; ".join(f"{f.label}: {f.reason}" for f in entry_unreachable)
+        raise TranslationError(
+            f"unsatisfiable entry clause(s) — the strategy can never enter a "
+            f"position: {details}"
+        )
 
 
 def _validate_indicator_kwargs(indicator: str, params: dict[str, Any]) -> None:

@@ -1,0 +1,15 @@
+[Unit]
+Description=Run strategy autodiscovery nightly at 03:00 America/New_York
+
+[Timer]
+# 3:00 AM Eastern. The America/New_York suffix makes systemd track EST/EDT
+# automatically, so it stays at 03:00 local across daylight-saving changes.
+OnCalendar=*-*-* 03:00:00 America/New_York
+# If the machine was off/asleep at 03:00, run once at next boot instead of
+# silently skipping the night.
+Persistent=true
+# Small jitter so it isn't hammering data APIs at exactly :00 alongside others.
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

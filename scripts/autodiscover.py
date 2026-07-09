@@ -70,6 +70,9 @@ def main() -> int:
     ap.add_argument("--trades-min", type=int, default=30)
     ap.add_argument("--cost-ceiling", type=float, default=1.00)
     ap.add_argument("--no-stop-on-pass", action="store_true")
+    ap.add_argument("--fast-only", action="store_true",
+                    help="Generation + fast eval only; never run the expensive "
+                         "canonical stage (for unattended/nightly runs).")
     ap.add_argument("--summary", default=str(Path("%s/autodiscover_summary.json" % (
         "/tmp/claude-0/-root/1a0bd03f-f0ad-4539-a540-6198cdf25a60/scratchpad"))))
     args = ap.parse_args()
@@ -123,6 +126,13 @@ def main() -> int:
               f"{'-> CANONICAL' if gate else 'screened-out'}", flush=True)
         if not gate:
             rec.update(result="screened_out"); candidates.append(rec); flush(); continue
+
+        if args.fast_only:
+            rec.update(result="fast_pass_canonical_skipped")
+            candidates.append(rec); flush()
+            print(f"CAND {i} {gen.spec.name} FAST-PASS (canonical skipped: --fast-only)",
+                  flush=True)
+            continue
 
         try:
             canon = run_evaluation(cls, symbols=canon_symbols, backtest_config=_cfg(),

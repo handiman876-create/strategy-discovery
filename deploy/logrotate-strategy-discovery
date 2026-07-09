@@ -1,0 +1,30 @@
+# logrotate config for the nightly autodiscovery log.
+# Install to /etc/logrotate.d/strategy-discovery (see deploy/install.sh).
+# Runs under the system's daily logrotate.timer.
+#
+# NOTE: logrotate does not support trailing/inline comments on directive lines,
+# so every directive below stands alone.
+#
+# copytruncate keeps this consistent with the trading-bot logs: the service's
+# append: redirect holds the file open by fd while a run is in progress, so we
+# rotate in place rather than rename out from under it.
+
+/root/strategy-discovery/logs/autodiscover.log
+{
+    # Considered once per day by logrotate.timer,
+    daily
+    # but rotate immediately if the file has already reached 10MB.
+    maxsize 10M
+    # Keep 7 rotations (~7 days of history).
+    rotate 7
+    # Don't error if the log doesn't exist yet.
+    missingok
+    # Skip rotation when the file is empty.
+    notifempty
+    # gzip rotated logs.
+    compress
+    # Compress on the next cycle, avoiding a copytruncate race.
+    delaycompress
+    # Rotate in place without needing the writer to reopen its fd.
+    copytruncate
+}

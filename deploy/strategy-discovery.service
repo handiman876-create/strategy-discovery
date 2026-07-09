@@ -1,0 +1,19 @@
+[Unit]
+Description=Nightly strategy autodiscovery (generation + fast eval only)
+Documentation=file:/root/strategy-discovery/deploy/run-autodiscover.sh
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# oneshot: run to completion, then exit (the .timer schedules it; it is not a daemon)
+Type=oneshot
+User=root
+WorkingDirectory=/root/strategy-discovery
+ExecStart=/root/strategy-discovery/deploy/run-autodiscover.sh
+# Generation can be slow; cap the whole run so a hung LLM call can't wedge it.
+TimeoutStartSec=3600
+StandardOutput=append:/root/strategy-discovery/logs/autodiscover.log
+StandardError=append:/root/strategy-discovery/logs/autodiscover.log
+
+# No [Install] section: a timer-activated oneshot is pulled in by its .timer,
+# not enabled directly.

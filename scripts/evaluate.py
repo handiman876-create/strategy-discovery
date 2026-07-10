@@ -41,11 +41,13 @@ from leaderboard.db import initialize_db
 from leaderboard.record import record_manual_strategy
 from manual.casper import CasperStrategy
 from manual.rsi2_mean_reversion import Rsi2MeanReversion
+from manual.hood_rsi8_mr import HoodRsi8MeanReversion
 from strategy.base import Strategy
 
 STRATEGY_REGISTRY: dict[str, Type[Strategy]] = {
     "casper": CasperStrategy,
     "rsi2_mr": Rsi2MeanReversion,
+    "hood_rsi8_mr": HoodRsi8MeanReversion,
 }
 
 # Named parameter grids per strategy. Keep these here so the eval CLI can

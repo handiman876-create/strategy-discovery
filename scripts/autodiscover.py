@@ -96,8 +96,8 @@ def main() -> int:
     ap.add_argument("--fast-only", action="store_true",
                     help="Generation + fast eval only; never run the expensive "
                          "canonical stage (for unattended/nightly runs).")
-    ap.add_argument("--summary", default=str(Path("%s/autodiscover_summary.json" % (
-        "/tmp/claude-0/-root/1a0bd03f-f0ad-4539-a540-6198cdf25a60/scratchpad"))))
+    ap.add_argument("--summary",
+                    default=str(_ROOT / "logs" / "autodiscover_summary.json"))
     args = ap.parse_args()
 
     load_dotenv(_ROOT / ".env", override=True)

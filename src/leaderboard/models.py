@@ -208,6 +208,7 @@ class EvaluationRecord:
     config_json: str
     median_pf: Optional[float] = None
     score: Optional[float] = None
+    ci_lower: Optional[float] = None
     duration_seconds: Optional[float] = None
     failed_conditions: list[dict[str, Any]] = field(default_factory=list)
     evaluated_at: str = field(default_factory=_utcnow_iso)

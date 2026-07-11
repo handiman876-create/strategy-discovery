@@ -44,6 +44,23 @@ ARCHETYPES = [
     "overnight_session", "seasonality", "volatility_breakout",
 ]  # 'pairs' excluded — translator defers it (multi-symbol position mgmt).
 
+# Weighted round-robin (Fix 2a, 2026-07-11). Discovery's only canonical pass to
+# date is a high-frequency mean-reversion strategy; seasonality / microstructure /
+# overnight_session are narrow-window, few-trade archetypes that repeatedly fail
+# canonical with high PF but ci_lower < 1.0. Bias generation toward the families
+# that produce separable edges. Weights are deterministic (no RNG) so runs stay
+# reproducible.
+ARCHETYPE_WEIGHTS = {
+    "mean_reversion": 3,       # up   — only family that has passed canonical
+    "momentum": 3,            # up
+    "volatility_breakout": 2,  # mid  — unchanged
+    "seasonality": 1,         # down — narrow-window, thin-edge
+    "microstructure": 1,      # down
+    "overnight_session": 1,   # down
+}
+# Expanded to a flat schedule so `i % len` draws in the weighted proportion.
+_WEIGHTED_ARCHETYPES = [a for a, w in ARCHETYPE_WEIGHTS.items() for _ in range(w)]
+
 
 def _class_name(spec_name: str) -> str:
     return "".join(p.capitalize() for p in spec_name.split("_"))
@@ -66,8 +83,14 @@ def _cfg():
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=18)
-    ap.add_argument("--score-min", type=float, default=1.5)
-    ap.add_argument("--trades-min", type=int, default=30)
+    ap.add_argument("--score-min", type=float, default=1.5,
+                    help="Retained for logging only; no longer a promotion gate "
+                         "(the screen promotes on --ci-lower-min, Fix 1).")
+    ap.add_argument("--ci-lower-min", type=float, default=1.0,
+                    help="Fast-screen promotion gate: promote to canonical only "
+                         "when the aggregate bootstrap CI lower bound exceeds this "
+                         "(edge separable from breakeven). Replaces the PF/score gate.")
+    ap.add_argument("--trades-min", type=int, default=50)
     ap.add_argument("--cost-ceiling", type=float, default=1.00)
     ap.add_argument("--no-stop-on-pass", action="store_true")
     ap.add_argument("--fast-only", action="store_true",
@@ -96,7 +119,7 @@ def main() -> int:
         if spent >= args.cost_ceiling:
             print(f"DONE reason=cost_ceiling spent=${spent:.4f}", flush=True)
             break
-        arch = ARCHETYPES[i % len(ARCHETYPES)]
+        arch = _WEIGHTED_ARCHETYPES[i % len(_WEIGHTED_ARCHETYPES)]
         rec = {"i": i, "archetype": arch}
         try:
             gen = generate_and_translate(arch, dedup=True, conn=conn)
@@ -119,10 +142,16 @@ def main() -> int:
             print(f"CAND {i} {gen.spec.name} FAST-ERROR {str(e)[:80]}", flush=True); continue
 
         fscore, ftr = fast.breakdown.score, fast.n_oos_trades_total
-        rec.update(fast_score=round(fscore, 3), fast_trades=ftr, fast_pf=round(fast.median_pf, 3))
-        gate = ftr > args.trades_min and fscore > args.score_min
+        rec.update(fast_score=round(fscore, 3), fast_trades=ftr,
+                   fast_pf=round(fast.median_pf, 3),
+                   fast_ci_lower=round(fast.ci_lower, 3))
+        # Fix 1: promote on edge separability (ci_lower > threshold) AND a trade
+        # floor — NOT on PF/score. ci_lower > 1.0 already implies a positive,
+        # separable edge, so it subsumes the old score/median_pf gates.
+        gate = ftr >= args.trades_min and fast.ci_lower > args.ci_lower_min
         print(f"CAND {i} {gen.spec.name} tf={list(gen.spec.timeframes)} "
-              f"fast_pf={fast.median_pf:.2f} fast_score={fscore:.2f} trades={ftr} "
+              f"ci_lower={fast.ci_lower:.3f} fast_pf={fast.median_pf:.2f} "
+              f"fast_score={fscore:.2f} trades={ftr} "
               f"{'-> CANONICAL' if gate else 'screened-out'}", flush=True)
         if not gate:
             rec.update(result="screened_out"); candidates.append(rec); flush(); continue

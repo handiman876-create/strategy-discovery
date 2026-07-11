@@ -117,6 +117,7 @@ def to_evaluation_record(
         config_json=cfg,
         median_pf=breakdown.median_pf,
         score=breakdown.score,
+        ci_lower=getattr(pipeline_result, "ci_lower", None),
         duration_seconds=None,
         failed_conditions=failed,
     )

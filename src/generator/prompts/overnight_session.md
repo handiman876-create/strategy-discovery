@@ -15,8 +15,11 @@
 **Counter-examples (do NOT generate):**
 - Intraday-only strategies — those are microstructure.
 - Multi-day holding strategies — those are momentum or seasonality.
+- **Over-gated overnights that rarely trigger** (e.g. a BB-squeeze or multi-condition regime gate on top of the overnight rule). Stacking a rare condition onto the close→open move produces too few trades, a wide bootstrap CI, and `ci_lower` below 1.0. Historic failure: `overnight_bb_squeeze_reversion`.
+
+**Robustness note (read the global objective first):** the gate is `ci_lower > 1.0 across many trades`, not high average PF. The overnight move can fire ~daily — keep it that way. Use at most ONE light conditional filter (sign/magnitude of prior-day return, or a slow trend filter); do not stack several rare conditions. Aim to keep the strategy trading frequently enough for a tight, above-1.0 CI lower bound.
 
 **Diversity nudge:**
-- Conditional overnights (gate on prior-day return, sign, magnitude).
-- Trend-filtered overnights (only when SMA(50) > SMA(200)).
+- Lightly conditional overnights (a single gate on prior-day return sign or magnitude).
+- Trend-filtered overnights (only when SMA(50) > SMA(200)) — one filter, not several.
 - Reversion-based overnights (gate on RSI of daily closes).

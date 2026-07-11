@@ -36,17 +36,22 @@ logger = logging.getLogger(__name__)
 
 FAST_LABEL = "FAST: NON-CANONICAL"
 
-# Minimum OOS trades for a fast score to be trustworthy. Coupled to the
-# canonical promise floor (scoring.MIN_TRADES_FOR_PROMISING) so the two tiers
-# can never drift. Below this, profit factor is dominated by a handful of trades
-# and the bootstrap CI is uninformative: a lucky 1-3 trade spec posts a capped
-# PF=100 -> score=100 and tops a score ranking (observed 2026-07-06, when the
-# three highest-scoring fast rows were all 1-3 trade artifacts). We floor such a
-# spec's fast score to 0 so under-sampled candidates sink instead of leading.
+# Minimum OOS trades for a fast score to be trustworthy. Below this, profit
+# factor is dominated by a handful of trades and the bootstrap CI is
+# uninformative: a lucky 1-3 trade spec posts a capped PF=100 -> score=100 and
+# tops a score ranking (observed 2026-07-06, when the three highest-scoring fast
+# rows were all 1-3 trade artifacts). We floor such a spec's fast score to 0 so
+# under-sampled candidates sink instead of leading.
 # NOTE: this floors the *noise* only. Genuinely-sampled specs whose PF later
 # collapses under the 10-symbol canonical walk-forward are canonical's job to
 # reject, not this floor's.
-FAST_MIN_TRADES = MIN_TRADES_FOR_PROMISING
+#
+# DECOUPLED from the canonical promise floor (scoring.MIN_TRADES_FOR_PROMISING,
+# = 30) and raised to 50 (Fix 2b, 2026-07-11). CI width scales ~1/sqrt(n), so
+# 30 trades across the 5 FAST_SYMBOLS (~6/symbol) is too thin to yield a stable
+# ci_lower — the metric the fast screen now promotes on. 50 (~10/symbol) is a
+# stricter sample-size bar at the fast tier; canonical keeps its own 30 floor.
+FAST_MIN_TRADES = 50
 FAST_SYMBOLS = ["AMD", "NFLX", "SPY", "QQQ", "NVDA"]
 
 
@@ -67,6 +72,7 @@ class FastEvaluationResult:
     n_oos_trades_total: int
     breakdown: ScoreBreakdown
     verdict: PromiseVerdict
+    ci_lower: float  # aggregate bootstrap CI lower bound (fast screen's gate metric)
     config: dict
     output_dir: Path | None = None
     diagnostics: dict | None = None
@@ -133,6 +139,7 @@ def run_fast_evaluation(
         n_oos_trades_total=n_total,
         breakdown=breakdown,
         verdict=canonical.verdict,
+        ci_lower=canonical.ci_lower,
         config=canonical.config,
     )
 

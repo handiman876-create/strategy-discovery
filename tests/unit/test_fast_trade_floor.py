@@ -64,8 +64,9 @@ def _cfg() -> BacktestConfig:
 
 
 def test_score_floored_when_undersampled(monkeypatch):
-    # 20 trades < FAST_MIN_TRADES (30); pick 20 so we also stay above the
-    # DIAGNOSE_BELOW_TRADES (10) branch and don't trip signal-frequency diag.
+    # FAST_MIN_TRADES - 10 trades is under the floor; the -10 offset also keeps
+    # us above the DIAGNOSE_BELOW_TRADES (10) branch so we don't trip the
+    # signal-frequency diagnostic.
     n = FAST_MIN_TRADES - 10
     assert n > fast_pipeline.DIAGNOSE_BELOW_TRADES
     monkeypatch.setattr(fast_pipeline, "run_evaluation",

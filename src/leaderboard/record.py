@@ -307,9 +307,9 @@ def record_evaluation(
             """
             INSERT INTO evaluations (
                 strategy_hash, eval_type, evaluated_at, duration_seconds,
-                n_oos_trades, median_pf, score, promising, failed_gates,
+                n_oos_trades, median_pf, score, ci_lower, promising, failed_gates,
                 results_dir, config_json, imported_from
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 strategy_hash,
@@ -319,6 +319,7 @@ def record_evaluation(
                 result.n_oos_trades,
                 result.median_pf,
                 result.score,
+                result.ci_lower,
                 1 if result.promising else 0,
                 failed_gates_json,
                 result.results_dir,

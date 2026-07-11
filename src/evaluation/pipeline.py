@@ -66,6 +66,11 @@ class EvaluationResult:
     verdict: PromiseVerdict
     config: dict[str, Any]
     aggregate_p_value: float
+    # Aggregate bootstrap CI lower bound (median of per-symbol ci_lower). This
+    # is the primary promotion signal for the fast screen — an edge whose lower
+    # confidence bound sits above 1.0 is separable from breakeven. Defaults to
+    # 0.0 for the no-trades / degenerate case.
+    ci_lower: float = 0.0
     output_dir: Path | None = None
 
 
@@ -294,6 +299,7 @@ def _finalize(
     # Aggregate metrics for scoring.
     n_oos_total = sum(s.n_oos_trades for s in per_symbol)
     pfs = [s.pf for s in per_symbol if s.n_oos_trades > 0]
+    ci_lower_agg = 0.0  # hoisted: set in the else branch, surfaced on the result
     if not pfs:
         # No symbol produced any trades → trivially not promising.
         breakdown = ScoreBreakdown(0.0, 0.0, 0.0, 0.0, 0.0)
@@ -321,6 +327,7 @@ def _finalize(
         verdict=verdict,
         config=config,
         aggregate_p_value=agg_p,
+        ci_lower=ci_lower_agg,
     )
 
     if output_root is not None:

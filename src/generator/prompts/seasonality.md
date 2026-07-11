@@ -17,7 +17,10 @@
 - Strategies that only use indicators and have no calendar trigger.
 - Random date conditions with no plausible flow-based explanation.
 - Anything intraday — those are microstructure.
+- **Ultra-narrow single-hour windows** (e.g. "only the last hour" / "only the power hour") with no broader filter. These fire too rarely, so their bootstrap CI is wide and `ci_lower` lands below 1.0 — the single most common way this archetype fails canonical. Historic failures: `last_hour_momentum_seasonality`, `power_hour_momentum_seasonality`.
+
+**Robustness note (read the global objective first):** the gate is `ci_lower > 1.0 across many trades`, not high average PF. A time-of-day rule must be paired with a broad trend/mean-reversion filter and use a wide enough window to clear ~50 trades/year/symbol. If your seasonality thesis can only express itself as a rare narrow trigger, prefer a broader formulation.
 
 **Diversity nudge:**
-- Different time-of-day windows (open-hour, midday, last-hour).
-- Different combinations with broader trend filters (SMA / ROC).
+- Prefer WIDER windows (e.g. whole morning or whole afternoon session) over single-hour slices.
+- Combine the calendar/time trigger with broader trend filters (SMA / ROC) so the edge is filtered, not just windowed.

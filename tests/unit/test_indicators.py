@@ -48,6 +48,37 @@ def test_rsi_all_down_returns_0():
     assert indicators.rsi(bars, 14) == 0.0
 
 
+def test_rsi_default_is_simple():
+    # The default smoothing must stay "simple" so existing callers/specs are
+    # byte-for-byte unchanged by the addition of the Wilder switch.
+    bars = _bars([100, 99, 101, 98, 102, 97, 103, 96, 104, 95, 105, 94, 106])
+    assert indicators.rsi(bars, 6) == indicators.rsi(bars, 6, smoothing="simple")
+
+
+def test_rsi_wilder_differs_from_simple():
+    # On a mixed short-period series the two smoothings must produce different
+    # values (both valid 0-100) — this is the divergence the switch exists for.
+    bars = _bars([100, 99, 101, 98, 102, 97, 103, 96, 104, 95, 105, 94, 106])
+    simple = indicators.rsi(bars, 6, smoothing="simple")
+    wilder = indicators.rsi(bars, 6, smoothing="wilder")
+    assert 0.0 <= wilder <= 100.0
+    assert wilder != simple
+
+
+def test_rsi_wilder_extremes_match_simple():
+    # Degenerate all-up / all-down series pin both smoothings to 100 / 0.
+    up = _bars(list(range(100, 116)))
+    down = _bars(list(range(150, 130, -1)))
+    assert indicators.rsi(up, 14, smoothing="wilder") == 100.0
+    assert indicators.rsi(down, 14, smoothing="wilder") == 0.0
+
+
+def test_rsi_unknown_smoothing_raises():
+    bars = _bars(list(range(100, 116)))
+    with pytest.raises(ValueError):
+        indicators.rsi(bars, 14, smoothing="ema")
+
+
 def test_atr_computes():
     bars = _bars([100] * 20, highs=[101]*20, lows=[99]*20)
     val = indicators.atr(bars, 14)

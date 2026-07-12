@@ -89,9 +89,44 @@ def ema(bars: Sequence["Bar"], period: int) -> Optional[float]:
 # ── Oscillators ──────────────────────────────────────────────────────────────
 
 
-def rsi(bars: Sequence["Bar"], period: int = 14) -> Optional[float]:
+RSI_SMOOTHING: tuple[str, ...] = ("simple", "wilder")
+
+
+def _wilder_avg(
+    gains: Sequence[float], losses: Sequence[float], period: int
+) -> tuple[float, float]:
+    """Wilder's recursive smoothing of the gain/loss series. Seed with the
+    simple average of the first `period` values, then apply the Wilder update
+    (alpha = 1/period) across every remaining bar. Converges after ~5*period
+    bars, so on a warmed-up buffer this matches a full-history Wilder RSI."""
+    avg_gain = _mean(gains[:period])
+    avg_loss = _mean(losses[:period])
+    for i in range(period, len(gains)):
+        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+    return avg_gain, avg_loss
+
+
+def rsi(
+    bars: Sequence["Bar"], period: int = 14, smoothing: str = "simple"
+) -> Optional[float]:
+    """Relative Strength Index.
+
+    smoothing:
+      "simple" — trailing arithmetic mean of the last `period` gains/losses
+                 (repo default; jumpier on short periods, and the value every
+                 existing caller/generated spec gets).
+      "wilder" — Wilder's recursive smoothing, i.e. TradingView's `ta.rsi`
+                 convention. Use this to reconcile against TradingView
+                 backtests, which diverge materially from "simple" on short
+                 periods (see the Wilder-vs-simple magnitude finding).
+    """
     if len(bars) < period + 1:
         return None
+    if smoothing not in RSI_SMOOTHING:
+        raise ValueError(
+            f"unknown rsi smoothing {smoothing!r}; expected one of {RSI_SMOOTHING}"
+        )
     closes = _closes(bars)
     gains = []
     losses = []
@@ -99,8 +134,11 @@ def rsi(bars: Sequence["Bar"], period: int = 14) -> Optional[float]:
         delta = closes[i] - closes[i - 1]
         gains.append(max(delta, 0))
         losses.append(max(-delta, 0))
-    avg_gain = _mean(gains[-period:])
-    avg_loss = _mean(losses[-period:])
+    if smoothing == "wilder":
+        avg_gain, avg_loss = _wilder_avg(gains, losses, period)
+    else:
+        avg_gain = _mean(gains[-period:])
+        avg_loss = _mean(losses[-period:])
     if avg_loss == 0:
         return 100.0
     rs = avg_gain / avg_loss

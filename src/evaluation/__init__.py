@@ -1,5 +1,13 @@
 """Evaluation harness — splits, walk-forward, significance tests, scoring."""
 
+from .baskets import (
+    FAST_BASKET,
+    FAST_BASKET_LABEL,
+    KNOWN_BASKETS,
+    basket_hash,
+    basket_identity,
+    basket_label,
+)
 from .symbols import (
     SP500_SUBSET,
     CRYPTO_TOP_15,
@@ -53,6 +61,12 @@ from .fast_pipeline import (
 )
 
 __all__ = [
+    "FAST_BASKET",
+    "FAST_BASKET_LABEL",
+    "KNOWN_BASKETS",
+    "basket_hash",
+    "basket_identity",
+    "basket_label",
     "SP500_SUBSET",
     "CRYPTO_TOP_15",
     "sp500_random_subset",

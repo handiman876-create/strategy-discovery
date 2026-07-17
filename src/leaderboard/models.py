@@ -212,6 +212,13 @@ class EvaluationRecord:
     duration_seconds: Optional[float] = None
     failed_conditions: list[dict[str, Any]] = field(default_factory=list)
     evaluated_at: str = field(default_factory=_utcnow_iso)
+    # Which symbol basket produced this eval. ci_lower is only comparable
+    # within a basket, so a row without these is unrankable against any other.
+    # Derived by evaluation.baskets.basket_identity() from the eval's own
+    # symbol list — never passed in by hand. Optional because pre-004 rows and
+    # hand-built test records predate the columns.
+    basket_version: Optional[str] = None
+    basket_hash: Optional[str] = None
 
 
 # ── Outputs from query.py ────────────────────────────────────────────────────

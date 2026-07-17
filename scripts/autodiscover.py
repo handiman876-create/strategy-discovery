@@ -37,6 +37,7 @@ from evaluation import WalkForwardConfig, run_evaluation
 from evaluation.fast_pipeline import run_fast_evaluation
 from evaluation.symbols import load_symbol_list
 from generator.pipeline import generate_and_translate
+from evaluation.baskets import FAST_BASKET, KNOWN_BASKETS, basket_identity
 from leaderboard.db import initialize_db
 
 ARCHETYPES = [
@@ -84,13 +85,20 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=18)
     ap.add_argument("--score-min", type=float, default=1.5,
-                    help="Retained for logging only; no longer a promotion gate "
-                         "(the screen promotes on --ci-lower-min, Fix 1).")
+                    help="Fast-screen promotion gate: the candidate's fast score "
+                         "must exceed this. Mirrors the canonical score gate, so "
+                         "a candidate the canonical tier would reject on score is "
+                         "never promoted to it (Fix 3, 2026-07-17).")
     ap.add_argument("--ci-lower-min", type=float, default=1.0,
                     help="Fast-screen promotion gate: promote to canonical only "
                          "when the aggregate bootstrap CI lower bound exceeds this "
-                         "(edge separable from breakeven). Replaces the PF/score gate.")
+                         "(edge separable from breakeven).")
     ap.add_argument("--trades-min", type=int, default=50)
+    ap.add_argument("--basket", default=None, choices=sorted(KNOWN_BASKETS),
+                    help="Symbol basket for the fast screen. Defaults to "
+                         "evaluation.baskets.FAST_BASKET (diverse8_v1). Every eval "
+                         "row records the basket it ran, since ci_lower is only "
+                         "comparable within one.")
     ap.add_argument("--cost-ceiling", type=float, default=1.00)
     ap.add_argument("--no-stop-on-pass", action="store_true")
     ap.add_argument("--fast-only", action="store_true",
@@ -106,13 +114,22 @@ def main() -> int:
     wf = WalkForwardConfig(train_window_months=24, test_window_months=6,
                            step_months=6, parameter_grid=None)
 
+    fast_basket = KNOWN_BASKETS[args.basket] if args.basket else FAST_BASKET
+    basket_label, basket_h = basket_identity(fast_basket)
+    print(f"BASKET fast={basket_label} ({basket_h}) symbols={fast_basket}", flush=True)
+
     candidates, hits = [], []
     spent = 0.0
     stop_on_pass = not args.no_stop_on_pass
 
     def flush():
+        # basket_version rides on the summary too, not just the DB rows: a
+        # summary's ci_lower numbers are meaningless without knowing which
+        # roster produced them, and the summary is what a human reads first.
         Path(args.summary).write_text(json.dumps(
-            {"candidates": candidates, "hits": hits,
+            {"basket_version": basket_label, "basket_hash": basket_h,
+             "fast_symbols": fast_basket,
+             "candidates": candidates, "hits": hits,
              "spent_usd": round(spent, 4)}, indent=2, default=str))
 
     for i in range(args.n):
@@ -136,7 +153,8 @@ def main() -> int:
         rec.update(name=gen.spec.name, hash=h[:12], timeframe=list(gen.spec.timeframes), cost=round(cost, 4))
         try:
             cls = _load_class(gen.code_path, gen.spec.name)
-            fast = run_fast_evaluation(cls, backtest_config=_cfg(), conn=conn, strategy_hash=h)
+            fast = run_fast_evaluation(cls, backtest_config=_cfg(), conn=conn,
+                                       strategy_hash=h, symbols=fast_basket)
         except Exception as e:
             rec.update(stage="fast", error=str(e)[:200]); candidates.append(rec); flush()
             print(f"CAND {i} {gen.spec.name} FAST-ERROR {str(e)[:80]}", flush=True); continue
@@ -145,10 +163,23 @@ def main() -> int:
         rec.update(fast_score=round(fscore, 3), fast_trades=ftr,
                    fast_pf=round(fast.median_pf, 3),
                    fast_ci_lower=round(fast.ci_lower, 3))
-        # Fix 1: promote on edge separability (ci_lower > threshold) AND a trade
-        # floor — NOT on PF/score. ci_lower > 1.0 already implies a positive,
-        # separable edge, so it subsumes the old score/median_pf gates.
-        gate = ftr >= args.trades_min and fast.ci_lower > args.ci_lower_min
+        # Promote on edge separability (ci_lower) AND a trade floor AND the
+        # canonical score gate.
+        #
+        # Fix 1 (2026-07-11) dropped score from this gate on the reasoning that
+        # ci_lower > 1.0 subsumes it. It does not: score and ci_lower measure
+        # different things, and canonical still rejects on BOTH. The 2026-07-16
+        # run promoted two candidates whose fast rows already recorded a score
+        # failure (fdc88ceb54fd score=0.340, 01325c323e43 score=1.194, gate 1.5)
+        # — the pipeline knew they would fail canonical and promoted them anyway.
+        # fdc88ceb54fd went on to fail canonical on score exactly as its fast row
+        # predicted. Screening on score here costs nothing and is strictly
+        # information we already have (Fix 3, 2026-07-17).
+        gate = (
+            ftr >= args.trades_min
+            and fast.ci_lower > args.ci_lower_min
+            and fscore > args.score_min
+        )
         print(f"CAND {i} {gen.spec.name} tf={list(gen.spec.timeframes)} "
               f"ci_lower={fast.ci_lower:.3f} fast_pf={fast.median_pf:.2f} "
               f"fast_score={fscore:.2f} trades={ftr} "

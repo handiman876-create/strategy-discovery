@@ -54,7 +54,42 @@ These approaches repeatedly produced attractive average PF but a bootstrap CI lo
 - ✗ **Bollinger / z-score reversion** firing on only a handful of trades
 - ✗ Any narrow window/regime trigger that fires rarely
 
+- ✗ **Index/high-momentum-concentrated edges** — strategies whose profit comes from a couple of trending names and evaporates on everything else (see below)
+
 ✓ Instead: broad-condition mean-reversion or momentum entries that fire often (50+ trades/year/symbol) and yield a tight, above-1.0 CI lower bound. Trade frequency is what makes the confidence interval narrow enough to clear the gate.
+
+**Your strategy is evaluated across a DIVERSE basket, and must earn its edge on ALL of it.**
+
+The evaluation basket deliberately spans broad indices (SPY, QQQ), high-beta growth (NVDA, AMD), financials (BLK, MS), low-volatility consumer staples (PG), and a range-bound semiconductor (QCOM). Aggregate ci_lower is computed across the whole basket, so an edge that only works on trending names is diluted by the names it fails on and will NOT clear the gate. A strategy that makes money on SPY and loses money on PG has not found an edge — it has found beta.
+
+This is measured, not hypothetical. Two 2026-07-16 candidates posted a strong average PF and failed canonical because the profit was concentrated:
+
+```
+rsi_ema_reversion_1d:  RSI(2)<10 AND close>EMA(50) AND EMA(50)>SMA(200)
+    SPY   PF 17.94   <- edge lives here
+    NVDA  PF  4.42
+    ...
+    PG    PF  0.54   <- and dies here
+    QCOM  PF  0.56
+  aggregate ci_lower 0.967 -> FAILED (needs > 1.0)
+```
+
+Note the shape of that failure: the losers are **low-volatility and range-bound names, and they cut across sectors** — PG (staples) and QCOM (semiconductors) both failed while SPY (a broad index) carried the result. This is NOT a sector effect, and picking different sectors will not fix it. The cause is that the entry only triggers profitably when a strong trend is already underway.
+
+BAD — DO NOT do this (long-only entry gated behind a stacked trend filter):
+```
+entry_long: RSI(2) < 10 AND close > EMA(50) AND EMA(50) > SMA(200)
+```
+Why it fails: `close > EMA(50) > SMA(200)` only holds in an established uptrend, so the strategy structurally cannot trade a flat or falling market — it sits out the regimes that would test it, and on names that rarely trend it either never fires or fires into chop. It also cannot be falsified by a drawdown, because it is never in the market during one.
+
+BETTER — an entry whose thesis does not require a pre-existing trend:
+```
+entry_long:  zscore(20) < -1.5 AND rsi(14) < 40
+entry_short: zscore(20) >  1.5 AND rsi(14) > 60
+```
+Why it is better: it fires in both directions, it fires in flat markets, and its edge does not depend on the symbol having trended for the last 200 bars — so it can earn a positive ci_lower on PG and QCOM as well as on NVDA.
+
+Prefer strategies that (a) trade both long and short, or (b) rely on a mean-reversion/volatility thesis that works in a range, over long-only trend-following. If your entry requires price above a long moving average, ask whether the edge is the signal or merely the trend.
 
 The DSL boolean expressions are JSON-tree:
 - `{"op":"compare","operator":">|<|>=|<=|==|!=","lhs":<operand>,"rhs":<operand>}`

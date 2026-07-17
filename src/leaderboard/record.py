@@ -308,8 +308,8 @@ def record_evaluation(
             INSERT INTO evaluations (
                 strategy_hash, eval_type, evaluated_at, duration_seconds,
                 n_oos_trades, median_pf, score, ci_lower, promising, failed_gates,
-                results_dir, config_json, imported_from
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                results_dir, config_json, imported_from, basket_version, basket_hash
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 strategy_hash,
@@ -325,6 +325,8 @@ def record_evaluation(
                 result.results_dir,
                 result.config_json,
                 imported_from,
+                result.basket_version,
+                result.basket_hash,
             ),
         )
         eval_id = cur.lastrowid

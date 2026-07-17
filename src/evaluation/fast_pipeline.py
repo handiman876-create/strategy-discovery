@@ -27,6 +27,7 @@ import pandas as pd
 from engine.backtester import BacktestConfig
 from strategy.base import Strategy
 
+from .baskets import FAST_BASKET
 from .leaderboard_hook import record_evaluation_to_leaderboard
 from .pipeline import run_evaluation
 from .scoring import MIN_TRADES_FOR_PROMISING, PromiseVerdict, ScoreBreakdown
@@ -52,7 +53,19 @@ FAST_LABEL = "FAST: NON-CANONICAL"
 # ci_lower — the metric the fast screen now promotes on. 50 (~10/symbol) is a
 # stricter sample-size bar at the fast tier; canonical keeps its own 30 floor.
 FAST_MIN_TRADES = 50
-FAST_SYMBOLS = ["AMD", "NFLX", "SPY", "QQQ", "NVDA"]
+
+# The fast screen's symbol basket. Sourced from evaluation.baskets so the roster
+# and its recorded identity (label + hash) can never drift apart — baskets.py is
+# the single definition; this is an alias kept for the module's existing
+# importers (evaluation/__init__, tests, scripts).
+#
+# Was ["AMD", "NFLX", "SPY", "QQQ", "NVDA"] (basket tech5_v1) through
+# 2026-07-16. That roster was 3/5 high-beta tech and rated beta as signal:
+# it promoted two strategies to canonical on ci_lower > 1.0 and both failed
+# there (d0cc300e5c07 1.054 -> 0.288; fdc88ceb54fd 1.145 -> 0.963). On
+# diverse8_v1 both are screened out at this tier (0.218 / 0.634), so the fast
+# screen now predicts the canonical verdict instead of contradicting it.
+FAST_SYMBOLS = FAST_BASKET
 
 
 DIAGNOSE_BELOW_TRADES = 10  # if total OOS trades < this, run signal-frequency diag
@@ -86,15 +99,24 @@ def run_fast_evaluation(
     output_root: Path | None = None,
     conn: Any = None,
     strategy_hash: str | None = None,
+    symbols: list[str] | None = None,
 ) -> FastEvaluationResult:
-    """Fast/sanity evaluation. Always uses 5-symbol subset and small bootstrap/
-    baseline. Returns FastEvaluationResult.
+    """Fast/sanity evaluation. Small bootstrap/baseline, no parameter grid.
+    Returns FastEvaluationResult.
 
     conn / strategy_hash: optional leaderboard-DB connection and the
     strategy's behavioral hash. When both are set, the fast result is
     recorded via record_evaluation(eval_type='fast') before returning.
     The inner run_evaluation call is intentionally NOT given conn — the
-    fast path records exactly one row (eval_type='fast'), not two."""
+    fast path records exactly one row (eval_type='fast'), not two.
+
+    symbols: basket override, defaulting to FAST_BASKET (diverse8_v1). Exists
+    so a caller can A/B a roster without editing the module global — the probe
+    that justified diverse8_v1 used exactly this. The resulting row records
+    whichever basket actually ran (see leaderboard.adapters), so an ad-hoc
+    roster is recorded as unknown_<hash> rather than silently inheriting the
+    default's label."""
+    basket = symbols if symbols is not None else FAST_BASKET
     if walk_config is None:
         walk_config = WalkForwardConfig(
             train_window_months=24,
@@ -105,7 +127,7 @@ def run_fast_evaluation(
 
     canonical = run_evaluation(
         strategy_class,
-        symbols=FAST_SYMBOLS,
+        symbols=basket,
         backtest_config=backtest_config,
         walk_config=walk_config,
         n_bootstrap=500,

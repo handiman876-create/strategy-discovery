@@ -110,6 +110,20 @@ def to_evaluation_record(
         else json.dumps(pipeline_result.config, default=str)
     )
 
+    # Basket identity is DERIVED from the symbols this eval actually ran, not
+    # accepted from the caller — a caller-supplied label could name a basket
+    # the run didn't use, which is the mislabeling the columns exist to catch.
+    # An ad-hoc symbol list is legitimate (probes, one-off reruns) and lands as
+    # unknown_<hash>; only a missing symbol list leaves the pair NULL.
+    # Imported inside the function, not at module scope: evaluation/__init__
+    # eagerly imports fast_pipeline -> leaderboard_hook -> this module, so a
+    # top-level `from evaluation.baskets import ...` would close the cycle and
+    # fail at import time. baskets itself depends on nothing but hashlib.
+    from evaluation.baskets import basket_identity
+
+    symbols = getattr(pipeline_result, "symbols", None)
+    basket_version, basket_hash_ = basket_identity(symbols) if symbols else (None, None)
+
     return EvaluationRecord(
         n_oos_trades=n_oos,
         promising=bool(verdict.is_promising),
@@ -120,4 +134,6 @@ def to_evaluation_record(
         ci_lower=getattr(pipeline_result, "ci_lower", None),
         duration_seconds=None,
         failed_conditions=failed,
+        basket_version=basket_version,
+        basket_hash=basket_hash_,
     )

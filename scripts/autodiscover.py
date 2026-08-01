@@ -45,19 +45,43 @@ ARCHETYPES = [
     "overnight_session", "seasonality", "volatility_breakout",
 ]  # 'pairs' excluded — translator defers it (multi-symbol position mgmt).
 
-# Weighted round-robin (Fix 2a, 2026-07-11). Discovery's only canonical pass to
-# date is a high-frequency mean-reversion strategy; seasonality / microstructure /
-# overnight_session are narrow-window, few-trade archetypes that repeatedly fail
-# canonical with high PF but ci_lower < 1.0. Bias generation toward the families
-# that produce separable edges. Weights are deterministic (no RNG) so runs stay
-# reproducible.
+# Weighted round-robin. Deterministic (no RNG) so runs stay reproducible.
+#
+# Rebalanced 2026-08-01. The previous weighting (mean_reversion 3, momentum 3,
+# volatility_breakout 2, rest 1) rested on the claim that mean_reversion was
+# "the only family that has passed canonical". That claim was FALSE: the
+# strategy it referred to (Rsi2MeanReversion, hash 0f517412) is promising only
+# on two superseded partial-basket evals; its final canonical run failed
+# (score 0.863 < 1.5, ci_lower 0.967 < 1.0) and its holdout failed all three
+# gates. NO family has ever passed canonical.
+#
+# Measured avg ci_lower on diverse8_v1 fast evals, filtered to n_oos_trades>=30
+# (the unfiltered view is dominated by 6- and 13-trade bootstrap artifacts that
+# report ci_lower of 100.0 and 68.9, which is what produced the false premise):
+#
+#     microstructure      0.717  (n=12)
+#     overnight_session   0.442  (n=17)
+#     seasonality         0.352  (n=8)
+#     mean_reversion      0.333  (n=63)
+#     momentum            0.307  (n=99)
+#     volatility_breakout 0.278  (n=9)
+#
+# Caveat worth keeping in view: these differences are NOT statistically
+# distinguishable. Exactly one strategy in 297 evals clears ci_lower > 1.0, and
+# mean_reversion's 1/63 rate vs momentum's 0/99 gives Fisher exact p = 0.389.
+# The families with n<20 have rule-of-three upper bounds of 17-37%, i.e. we do
+# not yet know whether they are good. So this reallocation is an EXPLORATION
+# decision — sample where uncertainty is highest — not a claim that
+# microstructure outperforms. Re-derive once Fix 3 (session warm-up gate,
+# d5e66ff) has produced a few weeks of data uncontaminated by zero-trade specs.
 ARCHETYPE_WEIGHTS = {
-    "mean_reversion": 3,       # up   — only family that has passed canonical
-    "momentum": 3,            # up
-    "volatility_breakout": 2,  # mid  — unchanged
-    "seasonality": 1,         # down — narrow-window, thin-edge
-    "microstructure": 1,      # down
-    "overnight_session": 1,   # down
+    "mean_reversion": 2,       # 3->2  false canonical premise removed; filtered avg 0.333
+    "momentum": 2,             # 3->2  best-sampled (n=99), tightest bound, avg 0.307
+    "microstructure": 2,       # 1->2  best filtered avg but only n=12 — under-sampled
+    "overnight_session": 2,    # 1->2  2nd-best filtered avg, n=17 — under-sampled
+    "volatility_breakout": 1,  # 2->1  81% of its 1h specs took zero trades; Fix 3 gates
+                               #       those now, so its real rate is still unknown
+    "seasonality": 1,          # 1->1  unchanged; n=8, least evidence either way
 }
 # Expanded to a flat schedule so `i % len` draws in the weighted proportion.
 _WEIGHTED_ARCHETYPES = [a for a, w in ARCHETYPE_WEIGHTS.items() for _ in range(w)]

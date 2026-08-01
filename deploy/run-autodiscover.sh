@@ -23,9 +23,9 @@ if ! flock -n 9; then
     exit 0
 fi
 
-echo "===== $(date -Is) autodiscover START (n=18, cost-ceiling=\$0.50, fast-only) ====="
+echo "===== $(date -Is) autodiscover START (n=20, cost-ceiling=\$0.50, fast-only) ====="
 venv/bin/python scripts/autodiscover.py \
-    --n 18 \
+    --n 20 \
     --cost-ceiling 0.50 \
     --fast-only \
     --summary "$LOG_SUMMARY"

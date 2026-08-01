@@ -12,8 +12,9 @@ Naming convention: each indicator function is named the same as its DSL key.
 
 from __future__ import annotations
 
+import inspect
 import math
-from typing import TYPE_CHECKING, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Optional, Sequence
 
 if TYPE_CHECKING:
     from strategy.context import Bar
@@ -299,3 +300,61 @@ INDICATOR_FUNCTIONS = {
     "percent_rank": percent_rank,
     "zscore": zscore,
 }
+
+
+# Which kwargs of each indicator are *lookbacks* — i.e. how many bars of
+# history the function needs before it can return non-None. Deliberately NOT
+# "every numeric kwarg": bb_*'s `k` is a standard-deviation multiplier and
+# rsi's `smoothing` is a string, so neither consumes history. Getting this
+# wrong in the permissive direction (treating k=2.0 as a lookback) would be
+# harmless; getting it wrong in the strict direction (missing `slow`) would
+# let an unwarmable spec through, so err toward listing more.
+_LOOKBACK_PARAMS: dict[str, tuple[str, ...]] = {
+    "sma": ("period",),
+    "ema": ("period",),
+    "rsi": ("period",),
+    "atr": ("period",),
+    "bb_mid": ("period",),
+    "bb_upper": ("period",),
+    "bb_lower": ("period",),
+    "roc": ("period",),
+    "percent_rank": ("period",),
+    "zscore": ("period",),
+    # MACD chains two EMAs: the signal line is an EMA(signal) *of* the
+    # slow-EMA-derived series, so warm-up is additive, not max().
+    "macd": ("slow", "signal"),
+    "macd_signal": ("slow", "signal"),
+    "macd_hist": ("slow", "signal"),
+    # daily_return needs only the previous bar.
+    "daily_return": (),
+}
+
+
+def indicator_lookback(indicator: str, params: dict[str, Any] | None = None) -> int:
+    """Bars of history `indicator` needs before it can return a value.
+
+    Falls back to each function's own default when a lookback kwarg is
+    omitted, so the answer reflects what will actually run. Unknown indicator
+    types return 0 — this feeds a rejection gate, and an unknown type is
+    already caught by the ALLOWED_INDICATORS check upstream; returning 0 here
+    avoids double-reporting it as a warm-up failure."""
+    names = _LOOKBACK_PARAMS.get(indicator)
+    if not names:
+        return 0
+    params = params or {}
+    fn = INDICATOR_FUNCTIONS[indicator]
+    sig = inspect.signature(fn)
+    total = 0
+    for name in names:
+        if name in params:
+            value = params[name]
+        else:
+            default = sig.parameters[name].default
+            if default is inspect.Parameter.empty:
+                continue
+            value = default
+        try:
+            total += int(value)
+        except (TypeError, ValueError):
+            continue
+    return total

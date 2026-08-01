@@ -298,10 +298,22 @@ def test_pipeline_records_failed_calls_to_spend(tmp_path, monkeypatch):
 def _spec_dict_with_timeframe(tf: str) -> dict:
     """Helper: a valid spec dict with timeframes=[tf]. The model is told
     to produce a strategy at this timeframe; we use this to fabricate
-    both compliant and non-compliant responses."""
+    both compliant and non-compliant responses.
+
+    Intraday timeframes get short-lookback indicators. The base fixture's
+    SMA(200) is unwarmable inside a single intraday session (a 1h session
+    holds 7 bars), so the session warm-up gate would reject it and these
+    tests — which are about timeframe-COMPLIANCE retry behaviour, not
+    warm-up — would fail for an unrelated reason. See
+    tests/unit/test_session_warmup_gate.py for the gate's own cover."""
     s = _valid_spec_dict()
     s["timeframes"] = [tf]
     s["name"] = f"mock_strat_{tf}"
+    if tf != "1d":
+        s["indicators"] = [
+            {"name": "rsi_2", "type": "rsi", "params": {"period": 2}},
+            {"name": "sma_200", "type": "sma", "params": {"period": 5}},
+        ]
     return s
 
 

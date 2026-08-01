@@ -26,8 +26,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from engine.session import session_bar_capacity
+
 from .archetypes import ARCHETYPES, get_archetype
-from .indicators import ALLOWED_INDICATORS, INDICATOR_FUNCTIONS, INDICATOR_RANGES
+from .indicators import (
+    ALLOWED_INDICATORS,
+    INDICATOR_FUNCTIONS,
+    INDICATOR_RANGES,
+    indicator_lookback,
+)
 from .spec import (
     And,
     BooleanExpression,
@@ -369,6 +376,94 @@ def validate_for_translation(spec: StrategySpec) -> None:
             f"unsatisfiable entry clause(s) — the strategy can never enter a "
             f"position: {details}"
         )
+
+    _validate_session_warmup(spec)
+
+
+def _validate_session_warmup(spec: StrategySpec) -> None:
+    """Reject specs whose indicators can never warm up inside one session.
+
+    On intraday timeframes `session_bars` resets at every session boundary, so
+    an indicator needing more bars than a session holds returns None on every
+    bar for the life of the backtest. The strategy translates fine, runs fine,
+    and silently takes zero trades — the most expensive failure mode we have,
+    because nothing surfaces it until someone asks why a whole cohort is
+    empty. 99/99 generated 1h strategies died this way ($3.05 of generation
+    spend) before this gate existed.
+
+    Daily-or-coarser timeframes are exempt: no session reset happens there, so
+    a 200-period SMA warms up across the series as intended."""
+    offenders: list[tuple[str, str, int, int]] = []
+    for tf in spec.timeframes:
+        capacity = session_bar_capacity(tf)
+        if capacity is None:
+            continue
+        for ind in spec.indicators:
+            need = indicator_lookback(ind.type, ind.params)
+            if need > capacity:
+                offenders.append((tf, ind.name, need, capacity))
+    if not offenders:
+        return
+    _record_session_warmup_quirk(spec.name, offenders)
+    details = "; ".join(
+        f"{name} ({ind_type_need} bars) on {tf} (session holds {cap})"
+        for tf, name, ind_type_need, cap in offenders
+    )
+    worst = max(offenders, key=lambda o: o[2])
+    raise TranslationError(
+        f"indicator period {worst[2]} exceeds session bars {worst[3]} — the "
+        f"indicator can never warm up within a single {worst[0]} session and "
+        f"would return None on every bar, so the strategy would take zero "
+        f"trades. Offenders: {details}. Fix: shorten the lookback to fit the "
+        f"session, or use a coarser timeframe where warm-up spans bars."
+    )
+
+
+def _record_session_warmup_quirk(
+    strategy_name: str, offenders: list[tuple[str, str, int, int]]
+) -> None:
+    """Persist a counter row for session warm-up rejections, mirroring the
+    unreachable_default / bad_indicator_kwargs shape. Without a counter we
+    cannot tell whether this gate is still earning its keep once the generator
+    prompt learns to respect session length. Defensive: any I/O failure is
+    swallowed so quirk logging never blocks translation."""
+    if not offenders:
+        return
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        data: dict = {}
+        if _QUIRKS_PATH.exists():
+            data = json.loads(_QUIRKS_PATH.read_text())
+        rec = data.setdefault(
+            "session_warmup",
+            {
+                "total": 0,
+                "by_strategy": {},
+                "by_timeframe": {},
+                "examples": [],
+                "first_seen": now,
+                "last_seen": now,
+            },
+        )
+        for tf, ind_name, need, cap in offenders:
+            rec["total"] += 1
+            rec["by_strategy"][strategy_name] = rec["by_strategy"].get(strategy_name, 0) + 1
+            rec["by_timeframe"][tf] = rec["by_timeframe"].get(tf, 0) + 1
+            if len(rec["examples"]) < 50:
+                rec["examples"].append(
+                    {
+                        "strategy": strategy_name,
+                        "timeframe": tf,
+                        "indicator": ind_name,
+                        "lookback_bars": need,
+                        "session_bars": cap,
+                    }
+                )
+        rec["last_seen"] = now
+        _QUIRKS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _QUIRKS_PATH.write_text(json.dumps(data, indent=2))
+    except Exception as e:
+        logger.warning("failed to record session_warmup quirk to %s: %s", _QUIRKS_PATH, e)
 
 
 def _validate_indicator_kwargs(indicator: str, params: dict[str, Any]) -> None:

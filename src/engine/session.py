@@ -182,6 +182,46 @@ def is_intraday_timeframe(bar_timeframe: str) -> bool:
     return bar_timeframe in INTRADAY_TIMEFRAMES
 
 
+# Maximum bars a single RTH session (09:30–16:00, 390 minutes) yields at each
+# intraday timeframe. Measured on SPY train+test data rather than derived from
+# 390/interval — bucket alignment makes the observed counts differ from the
+# arithmetic (1h resamples to 7 buckets, not 6, because label="left" opens a
+# 09:00 bucket; 4h reaches 3 on some sessions).
+#
+# This is a CAPACITY CEILING, not a typical count: half-days produce fewer.
+# Callers gating on "can an indicator ever warm up" want the ceiling, so a
+# spec is rejected only when warm-up is impossible on *every* session.
+#
+# Why this matters: session_bars resets at each session boundary for intraday
+# timeframes (see should_reset_session_at_bar). An indicator whose lookback
+# exceeds the session's bar count therefore never accumulates enough history —
+# it returns None on every bar, forever, and the strategy silently never
+# trades. That is exactly how 99/99 generated 1h strategies produced zero
+# trades before this gate existed.
+_BARS_PER_SESSION: dict[str, int] = {
+    "1m": 390,
+    "5m": 78,
+    "15m": 26,
+    "30m": 13,
+    "1h": 7,
+    "4h": 3,
+}
+
+
+def session_bar_capacity(bar_timeframe: str) -> int | None:
+    """Max bars available within one session at `bar_timeframe`.
+
+    Returns None for daily-or-coarser timeframes, meaning "unbounded" — no
+    session reset happens there (see should_reset_session_at_bar), so an
+    indicator can warm up across the full series regardless of lookback.
+
+    Unknown intraday timeframes also return None: refusing to guess is safer
+    than inventing a ceiling that silently rejects valid specs."""
+    if not is_intraday_timeframe(bar_timeframe):
+        return None
+    return _BARS_PER_SESSION.get(bar_timeframe)
+
+
 def should_reset_session_at_bar(
     bar_timeframe: str,
     session: Session,

@@ -8,8 +8,9 @@ Hard rules:
 - Indicators are limited to the following set. In `IndicatorSpec.params` use **exactly** the kwarg names below — the framework matches strictly, and synonyms like `std`, `length`, `window`, `lookback` will fail validation and waste a retry.
 
   ```
-  sma(period)              ema(period)              rsi(period=14)
-  atr(period=14)           roc(period=10)           daily_return()
+  sma(period)              ema(period)              atr(period=14)
+  roc(period=10)           daily_return()
+  rsi(period=14, smoothing='simple')
   bb_mid(period=20, k=2.0)    bb_upper(period=20, k=2.0)    bb_lower(period=20, k=2.0)
   macd(fast=12, slow=26, signal=9)
   macd_signal(fast=12, slow=26, signal=9)
@@ -20,6 +21,18 @@ Hard rules:
   Bollinger Bands take `k` (number of standard deviations), NOT `std`:
   - ✓ `bb_upper(period=20, k=2.0)`
   - ✗ `bb_upper(period=20, std=2.0)` — `k`, not `std`
+
+  `rsi` accepts `smoothing`, but **omit it** — leave it at the `'simple'`
+  default. Every stored evaluation and all existing leaderboard rows were
+  produced with simple smoothing, and the two conventions diverge materially on
+  short periods, so a `'wilder'` spec is not comparable to anything already
+  measured. `'wilder'` exists for hand-reconciling a strategy against a
+  TradingView backtest, not for generation.
+  - ✓ `rsi(period=2)` — smoothing defaults to `'simple'`
+  - ✗ `rsi(period=2, smoothing='wilder')` — DO NOT do this in a generated spec;
+    it silently breaks comparability with every prior result
+  - ✗ `rsi(period=14, smoothing='ema')` — not a valid value; only `'simple'`
+    and `'wilder'` exist, anything else raises
 
   Function-call form is shown for clarity. In JSON you write each indicator as `{"type": "bb_upper", "params": {"period": 20, "k": 2.0}}`.
 - `percent_rank(period=252)` returns a **fraction in [0, 1]** (0 = lowest in the lookback window, 1 = highest), **not** a 0–100 percentile. Compare it against fractional thresholds:

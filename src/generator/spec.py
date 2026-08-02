@@ -32,7 +32,7 @@ ARCHETYPE_NAMES = (
     "overnight_session",
 )
 ASSET_CLASSES = ("stocks", "crypto")
-TIMEFRAMES = ("5m", "15m", "1h", "1d")
+TIMEFRAMES = ("1m", "5m", "15m", "1h", "1d")
 
 # Position-sizing rules currently implemented in the engine.
 ALLOWED_SIZING_RULES = ("fixed",)

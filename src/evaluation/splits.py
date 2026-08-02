@@ -31,12 +31,17 @@ import pandas as pd
 from data.base import SCHEMA_COLUMNS, validate_schema
 from data.resample import resample as _resample_bars
 
-# Available timeframes per the spec's TIMEFRAMES literal. Source data is 5m,
-# everything else is resampled on load. If new finer timeframes are added
-# (e.g. "1m"), they'll need a separate data source — `_resolve_timeframe`
-# raises rather than silently returning the wrong-frequency 5m bars.
+# Timeframes stored natively on disk as their own parquet per symbol. Anything
+# else is resampled UP from _NATIVE_TIMEFRAME at load time.
+#
+# "1m" was added 2026-08-02 with its OWN source files. It is deliberately in
+# _STORED_TIMEFRAMES rather than served by the resampler: resampling 5m -> 1m
+# does not fail, it maps each 5m bar into a single 1-minute bin and hands back
+# wrong-frequency data wearing a "1m" label. Finer-than-native timeframes must
+# always read their own file — see `_source_timeframe`.
 _NATIVE_TIMEFRAME = "5m"
-_SERVABLE_TIMEFRAMES = frozenset({"5m", "15m", "30m", "1h", "4h", "1d"})
+_STORED_TIMEFRAMES = frozenset({"1m", "5m"})
+_SERVABLE_TIMEFRAMES = frozenset({"1m", "5m", "15m", "30m", "1h", "4h", "1d"})
 
 _ROOT = Path(__file__).resolve().parents[2]
 TRAIN_TEST_ROOT = _ROOT / "data" / "polygon"
@@ -76,24 +81,25 @@ def train_test_load(
 ) -> pd.DataFrame:
     """Load the train+test slice (everything before HOLDOUT_BOUNDARY).
 
-    `target_timeframe` resamples 5m source data to a coarser bar size if
-    requested. Defaults to "5m" (no-op). Raises if the requested timeframe
-    is finer than the native data — we cannot synthesize sub-5m bars."""
+    `target_timeframe` is read from its own parquet when natively stored
+    (see `_source_timeframe`), otherwise resampled from 5m source data to the
+    requested coarser bar size. Defaults to "5m" (no-op)."""
     if provider != "polygon":
         raise ValueError(f"only polygon supported in Phase 2; got {provider!r}")
     _resolve_timeframe(target_timeframe)
-    path = TRAIN_TEST_ROOT / symbol.upper() / "5m.parquet"
+    source_tf = _source_timeframe(target_timeframe)
+    path = TRAIN_TEST_ROOT / symbol.upper() / f"{source_tf}.parquet"
     if not path.exists():
         raise FileNotFoundError(
-            f"no train_test data for {symbol} at {path}; "
-            f"run scripts/fetch_data.py first"
+            f"no train_test {source_tf} data for {symbol} at {path}; "
+            f"run scripts/fetch_data.py --timeframe {source_tf} first"
         )
     df = pd.read_parquet(path)
     df = _normalize(df)
     boundary = pd.Timestamp(HOLDOUT_BOUNDARY, tz="America/New_York")
     df = df[df["timestamp"] < boundary].reset_index(drop=True)
     validate_schema(df)
-    if target_timeframe != _NATIVE_TIMEFRAME:
+    if target_timeframe != source_tf:
         df = _resample_bars(df, target_timeframe)
     return df
 
@@ -124,18 +130,19 @@ def holdout_load(
     if provider != "polygon":
         raise ValueError(f"only polygon supported in Phase 2; got {provider!r}")
     _resolve_timeframe(target_timeframe)
-    path = HOLDOUT_ROOT / symbol.upper() / "5m.parquet"
+    source_tf = _source_timeframe(target_timeframe)
+    path = HOLDOUT_ROOT / symbol.upper() / f"{source_tf}.parquet"
     if not path.exists():
         raise FileNotFoundError(
-            f"no holdout data for {symbol} at {path}; "
-            f"run scripts/fetch_data.py first"
+            f"no holdout {source_tf} data for {symbol} at {path}; "
+            f"run scripts/fetch_data.py --timeframe {source_tf} first"
         )
     df = pd.read_parquet(path)
     df = _normalize(df)
     boundary = pd.Timestamp(HOLDOUT_BOUNDARY, tz="America/New_York")
     df = df[df["timestamp"] >= boundary].reset_index(drop=True)
     validate_schema(df)
-    if target_timeframe != _NATIVE_TIMEFRAME:
+    if target_timeframe != source_tf:
         df = _resample_bars(df, target_timeframe)
     return df
 
@@ -148,18 +155,34 @@ def slice_window(df: pd.DataFrame, start: date, end_exclusive: date) -> pd.DataF
     return df[(df["timestamp"] >= s) & (df["timestamp"] < e)].reset_index(drop=True)
 
 
+def _source_timeframe(target_timeframe: str) -> str:
+    """Which on-disk parquet backs `target_timeframe`.
+
+    Natively-stored timeframes read their own file; everything coarser is
+    resampled from `_NATIVE_TIMEFRAME`. Centralized in one place because every
+    reader must agree: a caller that reads 5m and resamples to a FINER target
+    gets wrong-frequency bars back with no error, so the source choice can
+    never be re-derived ad hoc at each call site."""
+    if target_timeframe in _STORED_TIMEFRAMES:
+        return target_timeframe
+    return _NATIVE_TIMEFRAME
+
+
 def _resolve_timeframe(target_timeframe: str) -> None:
     """Per Additional ask C: keep this check as a stub even though every
-    entry in the spec's TIMEFRAMES literal is currently servable from 5m
-    via resampling. Future additions (e.g. "1m" or "tick") would not be
-    servable from 5m source data and must explicitly fail here rather
-    than silently returning the wrong-frequency native bars."""
+    entry in the spec's TIMEFRAMES literal is now either natively stored or
+    servable from 5m via resampling. Future additions (e.g. "tick") would be
+    servable from neither and must explicitly fail here rather than silently
+    returning the wrong-frequency native bars."""
     if target_timeframe not in _SERVABLE_TIMEFRAMES:
         raise ValueError(
-            f"timeframe {target_timeframe!r} is not servable from native 5m data. "
-            f"Servable timeframes: {sorted(_SERVABLE_TIMEFRAMES)}. "
-            f"To support a new timeframe, either add finer source data or "
-            f"extend _SERVABLE_TIMEFRAMES if the resampler can handle it."
+            f"timeframe {target_timeframe!r} is not servable. Servable: "
+            f"{sorted(_SERVABLE_TIMEFRAMES)} (natively stored: "
+            f"{sorted(_STORED_TIMEFRAMES)}; the rest resampled from "
+            f"{_NATIVE_TIMEFRAME}). To support a new timeframe, either add "
+            f"source data for it and list it in _STORED_TIMEFRAMES, or extend "
+            f"_SERVABLE_TIMEFRAMES if the resampler can reach it from "
+            f"{_NATIVE_TIMEFRAME}."
         )
 
 

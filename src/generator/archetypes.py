@@ -168,7 +168,10 @@ ARCHETYPES: dict[str, ArchetypeDefinition] = {
             "Casper-style opening-range scalping is in this family.",
         ],
         allowed_assets=["stocks"],
-        allowed_timeframes=["5m", "15m"],
+        # 1m added 2026-08-02, microstructure ONLY — this is the one archetype whose
+        # thesis is intraday order flow, so sub-5m bars are the intended resolution
+        # rather than noise. Every other archetype stays where it was on purpose.
+        allowed_timeframes=["1m", "5m", "15m"],
         examples=[
             "Opening range = first 30 min. Long on confirmed breakout above OR.high; "
             "stop at OR.low; exit at 15:50 ET. (This is Casper.)",

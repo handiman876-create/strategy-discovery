@@ -144,6 +144,7 @@ def main() -> int:
 
     candidates, hits = [], []
     spent = 0.0
+    generated = 0          # candidates that produced a usable spec (see exit code below)
     stop_on_pass = not args.no_stop_on_pass
 
     def flush():
@@ -172,6 +173,7 @@ def main() -> int:
         if gen.spec is None:
             rec.update(stage="generate", failed=gen.failure_reason); candidates.append(rec); flush()
             print(f"CAND {i} {arch} GEN-FAIL {gen.failure_reason}", flush=True); continue
+        generated += 1
 
         h = gen.strategy_hash
         rec.update(name=gen.spec.name, hash=h[:12], timeframe=list(gen.spec.timeframes), cost=round(cost, 4))
@@ -247,6 +249,25 @@ def main() -> int:
     print(f"DONE reason=batch_exhausted n={len(candidates)} hits={len(hits)} "
           f"spent=${spent:.4f}", flush=True)
     conn.close()
+
+    # hits=0 is the NORMAL, healthy outcome here — the generator screens on
+    # ci_lower > 1.0 and is expected to come up empty most nights. What is NOT
+    # normal is producing zero specs while spending zero dollars: that means every
+    # single generate call failed before it cost anything, which is an
+    # infrastructure failure (no API credits, bad key, provider down), not a
+    # batch of bad ideas. On 2026-08-03 all 20 candidates came back GEN-FAIL with
+    # spent=$0.0000 and this still exited 0, so the nightly timer looked green
+    # while generating nothing at all.
+    #
+    # Both halves of the condition are load-bearing. `spent == 0` alone would
+    # misfire on an --n 0 run; `generated == 0` alone would misfire on a night
+    # where real, paid-for generations all happened to fail validation — that is
+    # a bad batch, which is exactly what this job exists to discover.
+    if candidates and generated == 0 and spent == 0.0:
+        print(f"FAIL reason=no_generation_no_spend n={len(candidates)} — every "
+              f"candidate failed to generate and $0.00 was spent; treat as an API/"
+              f"credential outage, not an empty batch. Exiting 1.", flush=True)
+        return 1
     return 0
 
 

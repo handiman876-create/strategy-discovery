@@ -299,3 +299,98 @@ magic source of alpha.
     "every safety net is observable" norm.
   * Tests: `tests/unit/` — a spec whose entry never fires triggers the gate/retry;
     a normally-firing spec passes untouched.
+
+## Rolling-window evaluation (BACKTEST_YEARS)
+
+**Decision (2026-07-19):** Do NOT add a rolling / fixed-N-year backtest window
+(`BACKTEST_YEARS`) to `splits.py` now. Scoped against per-symbol start dates and
+a rolling window; both rejected.
+
+**Why:**
+  * Current behavior already approximates a 5-year window for most symbols — the
+    train/test span (2021-04-28 → 2024-12-31, ~44 mo) yields the max 3 walk-forward
+    windows already. A 5-year knob reproduces the status quo; a 3-year knob gives
+    FEWER windows (or zero if anchored to "today", since the walk-forward needs 30
+    months and can't reach past the fixed 2025-01-01 holdout boundary).
+  * "Self-updating as time passes" is illusory while `HOLDOUT_BOUNDARY` is a fixed
+    constant and train/test data ends there — the window's right edge is pinned at
+    the boundary, so a rolling window only ever trims the (already scarce) start.
+  * Anchoring the window to `today` also breaks leaderboard cross-run
+    comparability (same strategy re-evaluated later gives different numbers) — the
+    invariant `baskets.py` exists to protect.
+  * Regime mixing is ALREADY handled: the diverse8_v1 basket + aggregate ci_lower
+    gate reject strategies that only work in one regime (a NVDA-AI-boom-only edge
+    dies on PG/QCOM). See [[project_generator_screens_on_ci_lower]].
+
+**Re-evaluate: 2027-01.** By then a fixed 5-year window would start excluding
+pre-2022 data entirely, and if older data has begun diverging from current market
+behavior the trade-off flips. The correct mechanism at that point is likely
+"advance the holdout boundary forward + re-split" (grows the training span, stays
+reproducible via a versioned boundary), NOT trimming the walk-forward window.
+
+## 1m discovery needs NATIVE generation, not 5m strategies re-tested at 1m
+
+**Finding (2026-08-05):** `close_auction_rsi_reversion_scalp` (5m-native,
+microstructure) evaluated on the diverse8_v1 fast basket at four timeframes:
+
+| tf | time_s | ci_lower | trades | median_pf |
+|---|---:|---:|---:|---:|
+| 1m | 2112.0 | 0.790 | 9838 | 0.911 |
+| **5m** (native) | **684.1** | **0.926** | **4036** | **1.156** |
+| 15m | 161.9 | 0.700 | 2011 | 0.960 |
+| 1h | 8.3 | 0.000 | 0 | 0.000 |
+
+Performance is an **inverted U peaking at the model-chosen native timeframe**.
+At 1m the strategy is outright losing (PF 0.911 < 1.0) and separability is worse
+than at 5m (ci_lower 0.790 vs 0.926).
+
+**Conclusion: do NOT sweep 5m strategies onto 1m.** Generate 1m-native specs
+instead — shorter indicator periods, smaller exit targets, logic written for
+1-minute noise levels.
+
+**IMPORTANT CAVEAT — the inverted U is confounded, so do not read it as "1m is
+noise".** The sweep re-tests *identical parameters* at every bar size, and period
+parameters are not rescaled: RSI(14) is a 70-minute lookback at 5m, 14 minutes at
+1m, 3.5 hours at 15m. Those are economically different strategies. A profile that
+peaks at the timeframe the parameters were written for is the *expected* shape
+whether or not a real edge exists, so this data cannot distinguish "1m is too
+noisy for this effect" from "these parameters were never aimed at 1m". Native
+generation is the right fix precisely because it removes the confound — but the
+premise "1m adds noise not signal" is NOT established by this measurement.
+
+**Consequence for any cross-timeframe robustness rule** (e.g. promote on median
+ci_lower across arms): with unscaled parameters the arms are not comparable tests
+of one hypothesis, so the median largely measures how far each arm was detuned.
+Either rescale horizon parameters with bar size, or treat a sweep as search
+(best-of-N, with the multiple-comparisons correction that implies) rather than as
+robustness evidence.
+
+**Work required for native 1m generation (most of it already exists):**
+
+  * `src/generator/spec.py:35` — DONE, `TIMEFRAMES` already includes `"1m"`.
+  * `src/generator/archetypes.py` — DONE, `microstructure.allowed_timeframes`
+    is already `["1m", "5m", "15m"]`.
+  * `generate_and_translate(..., requested_timeframe=...)` — DONE, already
+    constrains the prompt and rejects mismatched specs via the
+    `timeframe_mismatch` quirk counter.
+  * `scripts/discover.py:84` — **STALE**: `--timeframe choices` is still
+    `["5m", "15m", "1h", "1d"]`, so `--timeframe 1m` is rejected at argparse. One
+    line.
+  * `src/generator/prompts/microstructure.md:10` — **BLOCKER**: says "5m or 15m
+    bars on US stocks only". This contradicts a `requested_timeframe="1m"`
+    request and will drive `timeframe_mismatch` retries, burning API calls on a
+    fight between the prompt and the constraint. Needs 1m guidance (period
+    lengths, target sizes, expected signal frequency).
+  * `scripts/autodiscover.py` — has no `--timeframe` flag at all; only needed if
+    the nightly job should generate 1m rather than a one-off `discover.py` run.
+
+**Cost data (measured, diverse8_v1, this strategy).** `evaluations.duration_seconds`
+is NULL for all rows, so these are the only eval timings that exist. Cost is NOT a
+clean power law in bar count — the exponent is ~1.31 between 15m and 5m but ~0.74
+between 5m and 1m (trades grow 2.44x while bars grow 4.59x, and bootstrap n=500 /
+baseline m=20 are fixed). Do not extrapolate; measure. Neighborhood totals:
+`{1m,5m,15m}` ~49 min/strategy, `{5m,15m,30m}` ~16 min. Swing `{1h,4h,1d}` is
+UNMEASURED — this strategy trades zero at 1h, so it needs a swing-archetype
+strategy to time.
+
+**No change to the nightly job.** The 3AM run stays as-is.

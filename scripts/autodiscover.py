@@ -23,6 +23,7 @@ import argparse
 import importlib.util
 import json
 import sys
+import time
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
@@ -39,6 +40,28 @@ from evaluation.symbols import load_symbol_list
 from generator.pipeline import generate_and_translate
 from evaluation.baskets import FAST_BASKET, KNOWN_BASKETS, basket_identity
 from leaderboard.db import initialize_db
+
+# ── Health canaries (added 2026-08-21) ───────────────────────────────────────
+#
+# The 2026-08-19 → 08-21 regression: the model began stringifying the
+# `position_sizing` field, every candidate died at generation, and three
+# consecutive nights produced ZERO evaluated strategies while spending $0.64
+# each and exiting 0. Nothing in the pipeline noticed. Two numbers would each
+# have caught it on the first morning:
+#
+#   * usable candidates — 19-20/night before, 0/night after.
+#   * wall-clock — the run takes 20-40 min when backtests actually run, and
+#     collapsed to 6-8 min once every spec failed before reaching the screen.
+#     A discovery run that finishes in 7 minutes has evaluated nothing.
+#
+# Both are emitted as WARN lines AND persisted into the dated summary, so the
+# morning health check can read one field instead of inferring failure from the
+# summary's file size.
+MIN_USABLE_CANDIDATES = 5
+MIN_EXPECTED_MINUTES = 15.0
+# Below this batch size the canaries are meaningless — a `--n 3` spot check is
+# expected to be small and fast — so they only arm for nightly-scale runs.
+CANARY_MIN_BATCH = 10
 
 ARCHETYPES = [
     "mean_reversion", "microstructure", "momentum",
@@ -130,6 +153,13 @@ def main() -> int:
                          "canonical stage (for unattended/nightly runs).")
     ap.add_argument("--summary",
                     default=str(_ROOT / "logs" / "autodiscover_summary.json"))
+    ap.add_argument("--fail-on-low-yield", action="store_true",
+                    help="Exit 1 when a health canary fires (near-zero usable "
+                         "candidates, or a run too short to have backtested "
+                         "anything). Off by default so the exit code keeps its "
+                         "documented 'outage vs bad batch' meaning; turn it on "
+                         "in the systemd unit to make the timer go red instead "
+                         "of only logging WARN.")
     args = ap.parse_args()
 
     load_dotenv(_ROOT / ".env", override=True)
@@ -146,20 +176,47 @@ def main() -> int:
     spent = 0.0
     generated = 0          # candidates that produced a usable spec (see exit code below)
     stop_on_pass = not args.no_stop_on_pass
+    started = time.monotonic()
+    warnings: list[str] = []
+
+    def elapsed_min() -> float:
+        return (time.monotonic() - started) / 60.0
 
     def flush():
         # basket_version rides on the summary too, not just the DB rows: a
         # summary's ci_lower numbers are meaningless without knowing which
         # roster produced them, and the summary is what a human reads first.
+        #
+        # usable_candidates / elapsed_minutes / warnings are the machine-readable
+        # form of the health canaries: a morning check reads these three fields
+        # rather than eyeballing the candidate array (or, as happened on
+        # 2026-08-19, missing the failure entirely because the summary still
+        # looked like a valid JSON document).
         Path(args.summary).write_text(json.dumps(
             {"basket_version": basket_label, "basket_hash": basket_h,
              "fast_symbols": fast_basket,
              "candidates": candidates, "hits": hits,
-             "spent_usd": round(spent, 4)}, indent=2, default=str))
+             "spent_usd": round(spent, 4),
+             "usable_candidates": generated,
+             "elapsed_minutes": round(elapsed_min(), 2),
+             "warnings": warnings}, indent=2, default=str))
 
+    def done(reason: str):
+        """The single terminal DONE line.
+
+        Until 2026-08-21 a cost-ceiling stop printed `DONE reason=cost_ceiling`
+        and then fell through to print `DONE reason=batch_exhausted` as well —
+        so the last DONE in the log, the one a human or a grep reads, claimed
+        all --n candidates had been tried when the run had actually stopped at
+        11 of 20. Every exit path now routes through here."""
+        print(f"DONE reason={reason} n={len(candidates)} hits={len(hits)} "
+              f"usable={generated} elapsed={elapsed_min():.1f}m "
+              f"spent=${spent:.4f}", flush=True)
+
+    stop_reason = "batch_exhausted"
     for i in range(args.n):
         if spent >= args.cost_ceiling:
-            print(f"DONE reason=cost_ceiling spent=${spent:.4f}", flush=True)
+            stop_reason = "cost_ceiling"
             break
         arch = _WEIGHTED_ARCHETYPES[i % len(_WEIGHTED_ARCHETYPES)]
         rec = {"i": i, "archetype": arch}
@@ -242,12 +299,31 @@ def main() -> int:
             print(f"HIT {gen.spec.name} hash={h[:12]} score={canon.breakdown.score:.3f} "
                   f"CANONICAL PASS", flush=True)
             if stop_on_pass:
-                print(f"DONE reason=canonical_pass spent=${spent:.4f}", flush=True)
+                done("canonical_pass")
                 conn.close(); return 0
 
+    # ── Health canaries ──────────────────────────────────────────────────────
+    # WARN, not exit-code: see the exit-code block below for why the two are
+    # deliberately kept separate.
+    if args.n >= CANARY_MIN_BATCH:
+        if generated < MIN_USABLE_CANDIDATES:
+            warnings.append(
+                f"low_yield: only {generated} of {len(candidates)} candidates "
+                f"produced a usable spec (floor {MIN_USABLE_CANDIDATES}) — "
+                f"suspect a systematic generation failure, not a bad batch; "
+                f"check the GEN-FAIL attempt reasons above"
+            )
+        if elapsed_min() < MIN_EXPECTED_MINUTES:
+            warnings.append(
+                f"short_run: completed in {elapsed_min():.1f}m (expected "
+                f">{MIN_EXPECTED_MINUTES:.0f}m) — too fast for backtests to have "
+                f"run, so candidates are failing before the fast screen"
+            )
+    for w in warnings:
+        print(f"WARN {w}", flush=True)
+
     flush()
-    print(f"DONE reason=batch_exhausted n={len(candidates)} hits={len(hits)} "
-          f"spent=${spent:.4f}", flush=True)
+    done(stop_reason)
     conn.close()
 
     # hits=0 is the NORMAL, healthy outcome here — the generator screens on
@@ -263,10 +339,30 @@ def main() -> int:
     # misfire on an --n 0 run; `generated == 0` alone would misfire on a night
     # where real, paid-for generations all happened to fail validation — that is
     # a bad batch, which is exactly what this job exists to discover.
+    #
+    # UNRESOLVED (2026-08-21): the paragraph above is what let the position_sizing
+    # regression run green for three nights. `generated == 0 and spent > 0` was
+    # classified as "a bad batch" — but a bad batch is specs that generate and
+    # then screen OUT, which still increments `generated`. Zero usable specs from
+    # 20 paid attempts has never once been a batch-quality signal; both times it
+    # has happened (2026-08-03 credits, 2026-08-19 schema drift) it was
+    # infrastructure. Dropping `spent == 0.0` from this condition would have
+    # turned the timer red on the morning of 08-19.
+    #
+    # It is left in place because test_exits_0_when_money_was_spent_and_all_
+    # candidates_failed asserts the current contract deliberately and in writing,
+    # and flipping it is a judgement call about alert noise that belongs to
+    # whoever gets paged. --fail-on-low-yield opts in without changing the
+    # default: add the flag to the systemd unit and the low-yield canary becomes
+    # a red timer instead of a WARN line.
     if candidates and generated == 0 and spent == 0.0:
         print(f"FAIL reason=no_generation_no_spend n={len(candidates)} — every "
               f"candidate failed to generate and $0.00 was spent; treat as an API/"
               f"credential outage, not an empty batch. Exiting 1.", flush=True)
+        return 1
+    if args.fail_on_low_yield and warnings:
+        print(f"FAIL reason=low_yield_canary — {len(warnings)} canary warning(s) "
+              f"and --fail-on-low-yield is set. Exiting 1.", flush=True)
         return 1
     return 0
 

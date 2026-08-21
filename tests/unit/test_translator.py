@@ -390,7 +390,7 @@ def test_translate_to_file_warns_but_does_not_raise_on_exit_clause(monkeypatch, 
     import generator.translator as tr
 
     quirks_path = tmp_path / "generation_quirks.json"
-    monkeypatch.setattr(tr, "_QUIRKS_PATH", quirks_path)
+    monkeypatch.setenv("GENERATION_QUIRKS_PATH", str(quirks_path))
 
     spec = StrategySpec(
         name="warn_only_no_raise",

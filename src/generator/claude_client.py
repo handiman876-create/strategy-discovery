@@ -40,7 +40,9 @@ from .spend_tracker import (
 DEFAULT_MODEL = "claude-sonnet-4-6"
 
 PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
-GENERATIONS_DIR = Path(__file__).resolve().parents[2] / "results" / "generations"
+# Path resolution lives in generator.paths so tests can redirect it; see
+# that module for why this is a call, not a module-level constant.
+from .paths import generations_dir
 
 TOOL_NAME = "submit_strategy_spec"
 TOOL_DESCRIPTION = (
@@ -277,9 +279,10 @@ class ClaudeClient:
         return system_blocks, "\n".join(parts)
 
     def _save_log(self, log: GenerationLog) -> Path:
-        GENERATIONS_DIR.mkdir(parents=True, exist_ok=True)
+        gen_dir = generations_dir()
+        gen_dir.mkdir(parents=True, exist_ok=True)
         slug = log.spec.name if log.spec else "failed"
-        path = GENERATIONS_DIR / f"{log.timestamp.replace(':', '-')}_{log.archetype}_{slug}.json"
+        path = gen_dir / f"{log.timestamp.replace(':', '-')}_{log.archetype}_{slug}.json"
         payload = {
             "timestamp": log.timestamp,
             "archetype": log.archetype,

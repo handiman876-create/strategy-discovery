@@ -19,6 +19,7 @@ from __future__ import annotations
 import inspect
 import json
 import logging
+from .paths import quirks_path
 import math
 import textwrap
 from dataclasses import asdict, dataclass
@@ -54,7 +55,6 @@ from .spec import (
 )
 
 GENERATED_DIR = Path(__file__).resolve().parents[2] / "strategies" / "generated"
-_QUIRKS_PATH = Path(__file__).resolve().parents[2] / "results" / "generation_quirks.json"
 
 logger = logging.getLogger(__name__)
 
@@ -78,8 +78,8 @@ def _record_kwargs_quirk(indicator: str, extra: list[str], missing: list[str]) -
     try:
         now = datetime.now(timezone.utc).isoformat()
         data: dict = {}
-        if _QUIRKS_PATH.exists():
-            data = json.loads(_QUIRKS_PATH.read_text())
+        if quirks_path().exists():
+            data = json.loads(quirks_path().read_text())
         rec = data.setdefault(
             "bad_indicator_kwargs",
             {
@@ -98,10 +98,10 @@ def _record_kwargs_quirk(indicator: str, extra: list[str], missing: list[str]) -
         for k in missing:
             rec["by_missing_kwarg"][k] = rec["by_missing_kwarg"].get(k, 0) + 1
         rec["last_seen"] = now
-        _QUIRKS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _QUIRKS_PATH.write_text(json.dumps(data, indent=2))
+        quirks_path().parent.mkdir(parents=True, exist_ok=True)
+        quirks_path().write_text(json.dumps(data, indent=2))
     except Exception as e:
-        logger.warning("failed to record kwargs quirk to %s: %s", _QUIRKS_PATH, e)
+        logger.warning("failed to record kwargs quirk to %s: %s", quirks_path(), e)
 
 
 # ── Unreachable-default detection (warn-only) ────────────────────────────────
@@ -275,8 +275,8 @@ def _record_unreachable_quirk(strategy_name: str, findings: list[UnreachableFind
     try:
         now = datetime.now(timezone.utc).isoformat()
         data: dict = {}
-        if _QUIRKS_PATH.exists():
-            data = json.loads(_QUIRKS_PATH.read_text())
+        if quirks_path().exists():
+            data = json.loads(quirks_path().read_text())
         rec = data.setdefault(
             "unreachable_default",
             {
@@ -304,10 +304,10 @@ def _record_unreachable_quirk(strategy_name: str, findings: list[UnreachableFind
                 example["indicator_range"] = list(example["indicator_range"])
                 rec["examples"].append(example)
         rec["last_seen"] = now
-        _QUIRKS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _QUIRKS_PATH.write_text(json.dumps(data, indent=2))
+        quirks_path().parent.mkdir(parents=True, exist_ok=True)
+        quirks_path().write_text(json.dumps(data, indent=2))
     except Exception as e:
-        logger.warning("failed to record unreachable_default quirk to %s: %s", _QUIRKS_PATH, e)
+        logger.warning("failed to record unreachable_default quirk to %s: %s", quirks_path(), e)
 
 
 # ── Public API ───────────────────────────────────────────────────────────────
@@ -432,8 +432,8 @@ def _record_session_warmup_quirk(
     try:
         now = datetime.now(timezone.utc).isoformat()
         data: dict = {}
-        if _QUIRKS_PATH.exists():
-            data = json.loads(_QUIRKS_PATH.read_text())
+        if quirks_path().exists():
+            data = json.loads(quirks_path().read_text())
         rec = data.setdefault(
             "session_warmup",
             {
@@ -460,10 +460,10 @@ def _record_session_warmup_quirk(
                     }
                 )
         rec["last_seen"] = now
-        _QUIRKS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _QUIRKS_PATH.write_text(json.dumps(data, indent=2))
+        quirks_path().parent.mkdir(parents=True, exist_ok=True)
+        quirks_path().write_text(json.dumps(data, indent=2))
     except Exception as e:
-        logger.warning("failed to record session_warmup quirk to %s: %s", _QUIRKS_PATH, e)
+        logger.warning("failed to record session_warmup quirk to %s: %s", quirks_path(), e)
 
 
 def _validate_indicator_kwargs(indicator: str, params: dict[str, Any]) -> None:

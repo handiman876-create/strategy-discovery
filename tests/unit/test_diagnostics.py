@@ -17,6 +17,7 @@ _load_spec_for and assert the result has them parsed back to dicts.
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
@@ -99,7 +100,7 @@ def test_load_spec_for_unpacks_stringified_dsl_fields(tmp_path):
     gen_dir.mkdir()
     _write_generation_file(gen_dir, "stringified_dsl_strategy", _stringified_spec_payload())
 
-    with patch.object(diagnostics, "_GENERATIONS_DIR", gen_dir):
+    with patch.dict(os.environ, {"GENERATIONS_DIR": str(gen_dir)}):
         spec = diagnostics._load_spec_for(StringifiedDslStrategy)
 
     # The whole point of the safety net: stringified fields come back as dicts.
@@ -228,7 +229,7 @@ def test_intraday_strategy_with_oversized_period_never_warms_within_session(tmp_
         _spec_with_period("intraday_period100_sma", period=100, timeframe="5m"),
     )
 
-    with patch.object(diagnostics, "_GENERATIONS_DIR", gen_dir), \
+    with patch.dict(os.environ, {"GENERATIONS_DIR": str(gen_dir)}), \
          patch.object(diagnostics, "train_test_load", return_value=bars_df):
         result = diagnostics.diagnose_signal_frequency(IntradayPeriod100Sma, "AMD")
 
@@ -267,7 +268,7 @@ def test_daily_strategy_warms_continuously_across_bars(tmp_path):
         _spec_with_period("daily_period100_sma", period=100, timeframe="1d"),
     )
 
-    with patch.object(diagnostics, "_GENERATIONS_DIR", gen_dir), \
+    with patch.dict(os.environ, {"GENERATIONS_DIR": str(gen_dir)}), \
          patch.object(diagnostics, "train_test_load", return_value=bars_1d):
         result = diagnostics.diagnose_signal_frequency(DailyPeriod100Sma, "AMD")
 
@@ -294,7 +295,7 @@ def test_diagnostic_session_reset_intraday_indicator_warms_in_session(tmp_path):
         _spec_with_period("intraday_sma20", period=20, timeframe="5m"),
     )
 
-    with patch.object(diagnostics, "_GENERATIONS_DIR", gen_dir), \
+    with patch.dict(os.environ, {"GENERATIONS_DIR": str(gen_dir)}), \
          patch.object(diagnostics, "train_test_load", return_value=bars_df):
         result = diagnostics.diagnose_signal_frequency(IntradaySma20, "AMD")
 

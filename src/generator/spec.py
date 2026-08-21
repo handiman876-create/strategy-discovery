@@ -18,7 +18,7 @@ from typing import Annotated, Any, Literal, Union
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .indicators import ALLOWED_INDICATORS, DAILY_ONLY_INDICATORS
-from .spec_recovery import recover_stringified_dsl_fields
+from .spec_recovery import recover_stringified_fields
 
 logger = logging.getLogger(__name__)
 
@@ -201,15 +201,26 @@ class StrategySpec(_Base):
     @model_validator(mode="before")
     @classmethod
     def _recover_stringified_dsl(cls, values, info) -> Any:
-        # LOAD-BEARING (decision 2026-04-28): Sonnet 4.6 stringifies the
-        # entry_long/entry_short/exit_long/exit_short fields routinely. The
-        # actual recovery + counter logic lives in spec_recovery.py so the
+        # LOAD-BEARING (decision 2026-04-28, widened 2026-08-21): Sonnet 4.6
+        # JSON-encodes structured slots as strings. It did this to the four DSL
+        # fields for months, then added `position_sizing` on 2026-08-19 and
+        # killed three nightly runs, because the helper enumerated field names
+        # by hand. It now derives the eligible set from model_fields, so this
+        # validator covers whichever slot the model stringifies next.
+        #
+        # The actual recovery + counter logic lives in spec_recovery.py so the
         # diagnostic and any future raw_tool_input consumer share the same
         # safety net. Do NOT inline the recovery back here.
         if not isinstance(values, dict):
             return values
         ctx = info.context or {}
-        return recover_stringified_dsl_fields(values, model=ctx.get("model", "unknown"))
+        # record_quirks=False in the context marks a REPLAY (archive recovery,
+        # tests) so it does not inflate the live quirk counter.
+        return recover_stringified_fields(
+            values,
+            model=ctx.get("model", "unknown"),
+            record=ctx.get("record_quirks", True),
+        )
 
     @model_validator(mode="after")
     def _validate(self) -> "StrategySpec":

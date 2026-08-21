@@ -28,7 +28,8 @@ import pandas as pd
 
 from engine.session import RegularTradingHours, Session, should_reset_session_at_bar
 from generator.indicators import INDICATOR_FUNCTIONS
-from generator.spec_recovery import recover_stringified_dsl_fields
+from generator.paths import generations_dir
+from generator.spec_recovery import recover_stringified_fields
 from strategy.base import Strategy
 from strategy.context import Bar
 
@@ -36,7 +37,6 @@ from .splits import train_test_load
 
 logger = logging.getLogger(__name__)
 
-_GENERATIONS_DIR = Path(__file__).resolve().parents[2] / "results" / "generations"
 _MIN_TRADES_FOR_SKIP = 10  # mirrored in fast_pipeline; below this we diagnose
 
 
@@ -57,21 +57,21 @@ def _load_spec_for(strategy_class: Type[Strategy]) -> dict:
     The class name is the CamelCase form of `spec.name`; we glob by suffix.
 
     The generation file stores `raw_tool_input` — the model's pre-validation
-    output, which may contain stringified DSL fields. We route through
-    `recover_stringified_dsl_fields` (the canonical helper used by the spec
+    output, which may contain stringified structured fields. We route through
+    `recover_stringified_fields` (the canonical helper used by the spec
     validator too) so the safety net + counter live in exactly one place."""
     snake = _camel_to_snake(strategy_class.__name__)
-    candidates = sorted(_GENERATIONS_DIR.glob(f"*_{snake}.json"))
+    candidates = sorted(generations_dir().glob(f"*_{snake}.json"))
     if not candidates:
         raise FileNotFoundError(
             f"no generation file found for strategy {strategy_class.__name__!r} "
-            f"(expected *_{snake}.json under {_GENERATIONS_DIR})"
+            f"(expected *_{snake}.json under {generations_dir()})"
         )
     payload = json.loads(candidates[-1].read_text())
     spec = payload.get("raw_tool_input")
     if not isinstance(spec, dict):
         raise ValueError(f"generation file {candidates[-1]} missing raw_tool_input dict")
-    return recover_stringified_dsl_fields(
+    return recover_stringified_fields(
         spec,
         model=payload.get("model", "unknown"),
         archetype=payload.get("archetype"),

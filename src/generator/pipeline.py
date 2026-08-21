@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,6 +29,7 @@ from leaderboard.record import record_generation
 from .archetypes import get_archetype
 from .claude_client import ClaudeClient, GenerationLog
 from .dedup import compute_strategy_hash
+from .paths import generations_dir, quirks_path
 from .spec import StrategySpec
 from .translator import GENERATED_DIR, TranslationError, translate_to_file
 
@@ -36,8 +38,17 @@ logger = logging.getLogger(__name__)
 DEFAULT_MAX_RETRIES = 3
 DEFAULT_DIVERSITY_N = 5
 
-GENERATIONS_DIR = Path(__file__).resolve().parents[2] / "results" / "generations"
-_QUIRKS_PATH = Path(__file__).resolve().parents[2] / "results" / "generation_quirks.json"
+# Per-attempt reason text is truncated to this many characters in the assembled
+# failure_reason. Pydantic validation errors carry a URL and a type tag that add
+# ~80 chars of boilerplate after the part that identifies the field, so this has
+# to be generous enough to survive them.
+_REASON_CHARS = 240
+
+# Strips the "Attempt 2 " that retry-feedback strings already carry, plus the
+# bare "failed: " that the API-error path adds, so the assembled line reads
+# "attempt 2: <the actual reason>" instead of "attempt 2: failed: <reason>".
+_ATTEMPT_PREFIX = re.compile(r"^Attempt\s+\d+\s+(?:failed:\s*)?")
+
 
 
 @dataclass
@@ -72,6 +83,7 @@ def generate_strategy(
     logs: list[GenerationLog] = []
     feedback: str | None = None
     last_was_tf_mismatch = False
+    attempt_reasons: list[str] = []
 
     for attempt in range(1, max_retries + 1):
         spec, log, fb, was_tf_mismatch = _generate_spec_with_timeframe_check(
@@ -86,6 +98,7 @@ def generate_strategy(
 
         if spec is None:
             feedback = fb
+            attempt_reasons.append(fb or "unknown failure")
             last_was_tf_mismatch = was_tf_mismatch
             continue
 
@@ -96,6 +109,7 @@ def generate_strategy(
             validate_for_translation(spec)
         except TranslationError as e:
             feedback = f"Attempt {attempt} translator rejected: {e}"
+            attempt_reasons.append(feedback)
             last_was_tf_mismatch = False
             continue
 
@@ -111,7 +125,7 @@ def generate_strategy(
     return GenerateResult(
         spec=None,
         logs=logs,
-        failure_reason=f"all {max_retries} attempts failed",
+        failure_reason=_format_failure_reason(max_retries, attempt_reasons),
     )
 
 
@@ -145,6 +159,7 @@ def generate_and_translate(
     diversity = _load_diversity_context(archetype, n=diversity_n)
     logs: list[GenerationLog] = []
     last_was_tf_mismatch = False
+    attempt_reasons: list[str] = []
 
     for attempt in range(1, max_retries + 1):
         spec, log, fb, was_tf_mismatch = _generate_spec_with_timeframe_check(
@@ -159,6 +174,7 @@ def generate_and_translate(
 
         if spec is None:
             feedback = fb
+            attempt_reasons.append(fb or "unknown failure")
             last_was_tf_mismatch = was_tf_mismatch
             continue
 
@@ -174,6 +190,7 @@ def generate_and_translate(
                 bh = compute_strategy_hash(spec)
             except Exception as e:
                 feedback = f"Attempt {attempt} strategy hash failed: {e}"
+                attempt_reasons.append(feedback)
                 last_was_tf_mismatch = False
                 continue
 
@@ -183,6 +200,7 @@ def generate_and_translate(
                     f"(structural hash {bh[:12]}). Choose materially different "
                     f"parameters or logic."
                 )
+                attempt_reasons.append(feedback)
                 last_was_tf_mismatch = False
                 continue
         else:
@@ -192,10 +210,12 @@ def generate_and_translate(
             path = translate_to_file(spec, overwrite=True)
         except TranslationError as e:
             feedback = f"Attempt {attempt} translator rejected: {e}"
+            attempt_reasons.append(feedback)
             last_was_tf_mismatch = False
             continue
         except Exception as e:
             feedback = f"Attempt {attempt} translator crashed: {e}"
+            attempt_reasons.append(feedback)
             last_was_tf_mismatch = False
             continue
 
@@ -221,11 +241,37 @@ def generate_and_translate(
     return GenerateResult(
         spec=None,
         logs=logs,
-        failure_reason=f"all {max_retries} attempts failed",
+        failure_reason=_format_failure_reason(max_retries, attempt_reasons),
     )
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
+
+
+def _format_failure_reason(max_retries: int, attempt_reasons: list[str]) -> str:
+    """Assemble the GEN-FAIL text from the per-attempt reasons.
+
+    WHY: until 2026-08-21 this was the bare string "all N attempts failed" and
+    the retry loop threw away the reason it already held in `feedback`. When the
+    model started stringifying `position_sizing` on 2026-08-19, three nightly
+    runs logged 33 identical contentless GEN-FAILs a night; diagnosing it meant
+    grepping 2,008 archived generation records for the error text that had been
+    in this function's hands all along.
+
+    The first line keeps the exact legacy prefix ("all N attempts failed") so
+    existing log greps and tests still match; the reasons follow indented.
+    """
+    header = f"all {max_retries} attempts failed"
+    if not attempt_reasons:
+        return header
+    lines = [f"{header}:"]
+    for n, reason in enumerate(attempt_reasons, start=1):
+        # Reasons arrive as "Attempt 2 translator rejected: ..." — strip the
+        # embedded attempt number so it is not printed twice, and flatten the
+        # multi-line pydantic errors onto one line each.
+        flat = " ".join(_ATTEMPT_PREFIX.sub("", str(reason)).split())
+        lines.append(f"  attempt {n}: {flat[:_REASON_CHARS]}")
+    return "\n".join(lines)
 
 
 def _generate_spec_with_timeframe_check(
@@ -290,8 +336,8 @@ def _record_timeframe_mismatch_quirk(
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc).isoformat()
         data: dict = {}
-        if _QUIRKS_PATH.exists():
-            data = json.loads(_QUIRKS_PATH.read_text())
+        if quirks_path().exists():
+            data = json.loads(quirks_path().read_text())
         rec = data.setdefault(
             "timeframe_mismatch",
             {
@@ -310,11 +356,11 @@ def _record_timeframe_mismatch_quirk(
             rec["by_requested_timeframe"].get(requested, 0) + 1
         )
         rec["last_seen"] = now
-        _QUIRKS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _QUIRKS_PATH.write_text(json.dumps(data, indent=2))
+        quirks_path().parent.mkdir(parents=True, exist_ok=True)
+        quirks_path().write_text(json.dumps(data, indent=2))
     except Exception as e:
         logger.warning(
-            "failed to record timeframe_mismatch quirk to %s: %s", _QUIRKS_PATH, e
+            "failed to record timeframe_mismatch quirk to %s: %s", quirks_path(), e
         )
 
 
@@ -362,10 +408,10 @@ def _record_generation_to_leaderboard(
 def _load_diversity_context(archetype: str, n: int) -> list[dict]:
     """Scan results/generations/ for recent successful generations of this
     archetype, return short summaries for the prompt."""
-    if not GENERATIONS_DIR.exists():
+    if not generations_dir().exists():
         return []
     matches: list[tuple[str, dict]] = []
-    for path in sorted(GENERATIONS_DIR.glob(f"*_{archetype}_*.json"), reverse=True):
+    for path in sorted(generations_dir().glob(f"*_{archetype}_*.json"), reverse=True):
         try:
             payload = json.loads(path.read_text())
         except Exception:
@@ -389,10 +435,10 @@ def _load_diversity_context(archetype: str, n: int) -> list[dict]:
 
 
 def _load_prior_strategy_hashes(archetype: str) -> set[str]:
-    if not GENERATIONS_DIR.exists():
+    if not generations_dir().exists():
         return set()
     out: set[str] = set()
-    for path in GENERATIONS_DIR.glob(f"*_{archetype}_*.json"):
+    for path in generations_dir().glob(f"*_{archetype}_*.json"):
         try:
             payload = json.loads(path.read_text())
         except Exception:

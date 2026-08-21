@@ -176,7 +176,7 @@ def test_gate_records_quirk_counter(tmp_path, monkeypatch):
     import generator.translator as tr
 
     quirks = tmp_path / "quirks.json"
-    monkeypatch.setattr(tr, "_QUIRKS_PATH", quirks)
+    monkeypatch.setenv("GENERATION_QUIRKS_PATH", str(quirks))
     spec = _spec(
         timeframes=["5m"],
         indicators=[IndicatorSpec(name="sma_200", type="sma", params={"period": 200})],

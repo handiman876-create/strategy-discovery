@@ -318,10 +318,12 @@ def _spec_dict_with_timeframe(tf: str) -> dict:
 
 
 def _patched_quirks_path(monkeypatch, tmp_path):
-    """Redirect _QUIRKS_PATH so tests don't pollute results/generation_quirks.json."""
-    monkeypatch.setattr(
-        "generator.pipeline._QUIRKS_PATH", tmp_path / "quirks.json"
-    )
+    """Redirect the quirk counter so tests don't pollute the production file.
+
+    Kept as an explicit call for the tests that read the counter back, but it is
+    now belt-and-braces: tests/conftest.py's autouse isolated_generator_paths
+    fixture already points GENERATION_QUIRKS_PATH at a per-test tmp file."""
+    monkeypatch.setenv("GENERATION_QUIRKS_PATH", str(tmp_path / "quirks.json"))
 
 
 def test_no_timeframe_flag_no_prompt_injection(tmp_path, monkeypatch):

@@ -394,3 +394,65 @@ UNMEASURED — this strategy trades zero at 1h, so it needs a swing-archetype
 strategy to time.
 
 **No change to the nightly job.** The 3AM run stays as-is.
+
+---
+
+## Generator prompt: target score > 1.5
+
+**Observed (2026-08-21):** The score gate (> 1.5) is the binding constraint,
+not ci_lower (> 1.0). Three strategies have cleared ci_lower; all three failed
+score, and `failed_gates` on each row lists `score` as the only failure:
+
+| strategy | ci_lower | score | deficit | median_pf | trades |
+|---|---|---|---|---|---|
+| overnight_rsi_trend_filter | 1.063 | 1.194 | 0.306 | 2.17 | 243 |
+| daily_macd_hist_roc_momentum | 1.042 | 1.155 | 0.345 | 2.94 | 83 |
+| rsi_ema_reversion_1d | 1.145 | 0.340 | 1.160 | 2.46 | 153 |
+
+**What score actually measures** (`src/evaluation/scoring.py:64`) — NOT a
+Sharpe-like temporal consistency measure, which is the intuitive reading and
+the wrong one:
+
+    score = median_pf
+          * 1/(1 + pstdev of PER-SYMBOL PFs)   <- dispersion ACROSS SYMBOLS
+          * 0.95 ** num_parameters
+          * (1.0 if p_value < 0.05 else 0.5)
+
+Every factor is cross-sectional or structural. Nothing in it looks at monthly
+returns, equity-curve smoothness, or win/loss distribution over time.
+
+**Which factor is binding.** All three declare exactly 2 parameters, so the
+parameter penalty is 0.902 for each — not the problem. median_pf is 2.17-2.94
+against a 1.2 gate — also not the problem. Backing the residual out of
+score/median_pf (0.549, 0.392, 0.138) leaves the consistency factor, and if the
+significance factor is 1.0 that implies per-symbol PF standard deviations of
+roughly 0.64, 1.30, and 5.5 respectively. These strategies do not have a weak
+edge; they have an edge that is wildly uneven from symbol to symbol.
+
+Concretely, for overnight_rsi_trend_filter to reach 1.5 at its existing
+median_pf and parameter count, it needs consistency >= 1.5/(2.17*0.902) = 0.766,
+i.e. per-symbol PF stdev <= 0.31 versus roughly 0.64 today. Halving cross-symbol
+dispersion gets there. Raising PF does not: at stdev 0.64 it would need
+median_pf > 4.2.
+
+**Direction:** Update the generator prompt to target cross-symbol UNIFORMITY,
+not temporal consistency. The ask is an edge that produces a similar profit
+factor on every symbol in the basket — a strategy that prints PF 4 on NVDA and
+PF 0.9 on PG scores worse than one that prints 1.8 on both, even though the
+first has the higher median. Secondary lever: the significance factor halves
+the score outright when p >= 0.05, so it is worth an explicit instruction to
+favour setups that fire often enough to reach significance.
+
+Do NOT phrase this as "consistent monthly returns / low variance / avoid
+occasional large wins masking losses" — that describes temporal variance, which
+this score does not measure, and would send the generator after the wrong
+property.
+
+**Caveat:** these three rows ran on the legacy 5-symbol basket
+(AMD, NFLX, SPY, QQQ, NVDA), not diverse8_v1. Cross-symbol dispersion is
+basket-dependent by construction, so re-measure on diverse8_v1 before tuning
+the prompt against these specific numbers.
+
+**Prerequisite:** DONE — score semantics established above. Next step is
+drafting the prompt language, with a negative example for each positive one
+per project convention.

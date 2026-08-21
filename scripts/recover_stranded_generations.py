@@ -59,7 +59,9 @@ from generator.dedup import compute_strategy_hash
 from generator.paths import generations_dir
 from generator.spec import StrategySpec
 from generator.translator import TranslationError, translate_to_file
+from leaderboard.adapters import to_generation_metadata
 from leaderboard.db import initialize_db
+from leaderboard.record import record_generation
 
 # Reuse the nightly loop's class loader and backtest config rather than
 # restating them: a recovered spec must be screened under EXACTLY the same
@@ -73,6 +75,24 @@ _ad_spec.loader.exec_module(_ad)
 _load_class, _cfg = _ad._load_class, _ad._cfg
 
 SPEND_LEDGER = _ROOT / "results" / "api_spend.json"
+
+
+class _ArchivedLog:
+    """Re-hydrates the fields to_generation_metadata reads from a GenerationLog.
+
+    The recovered spec never went through generate_and_translate, so no
+    strategies row exists for it — and record_evaluation has a foreign-key
+    dependency on that row, which is why an un-recorded recovery logs
+    "cannot record evaluation: strategy ... not found" and silently keeps the
+    fast result out of the leaderboard.
+    """
+
+    def __init__(self, payload: dict, path: Path):
+        self.timestamp = payload.get("timestamp")
+        self.model = payload.get("model", "unknown")
+        self.prompt_hash = payload.get("prompt_hash", "")
+        self.actual_cost_usd = float(payload.get("actual_cost_usd") or 0.0)
+        self.raw_response_path = str(path)
 
 
 def _billed_call_ids() -> set[str]:
@@ -147,6 +167,14 @@ def main() -> int:
                          "ledger can: it holds only call_ids the API actually "
                          "billed. That is also the right definition of a record "
                          "worth recovering — one we already paid for.")
+    ap.add_argument("--timeframes", default=None, metavar="1d,1h",
+                    help="Comma-separated timeframes to evaluate; others are counted "
+                         "and skipped. Fast-eval cost is wildly non-uniform by bar "
+                         "size (measured 2026-08-05: 1d ~8s, 1h ~8s, 15m ~162s, "
+                         "5m ~684s, 1m ~2112s per spec), so a mixed batch is "
+                         "dominated by its intraday tail — 26 5m specs are ~5 hours "
+                         "while 63 daily/hourly specs are ~12 minutes. Split the "
+                         "batch when wall-clock matters.")
     ap.add_argument("--limit", type=int, default=0,
                     help="Stop after this many recovered specs (0 = no limit). "
                          "Applies to evaluation, not to the scan.")
@@ -155,7 +183,7 @@ def main() -> int:
     load_dotenv(_ROOT / ".env", override=True)
 
     scanned = 0
-    recovered: list[tuple[Path, StrategySpec]] = []
+    recovered: list[tuple[Path, StrategySpec, dict]] = []
     still_failing: Counter[str] = Counter()
     was_already_valid = 0
     skipped_unbilled = 0
@@ -198,7 +226,7 @@ def main() -> int:
         except Exception as e:
             still_failing[" ".join(str(e).split())[:120]] += 1
             continue
-        recovered.append((path, spec))
+        recovered.append((path, spec, payload))
         recovered_cost += cost
 
     print(f"SCAN dir={generations_dir()} window={args.since or 'any'}..{args.until or 'any'}")
@@ -212,11 +240,11 @@ def main() -> int:
     # Dedup by structural hash: the retry loop makes up to 3 attempts per
     # candidate and they are often near-identical, so the raw recovered count
     # overstates how many distinct strategies are actually on the table.
-    by_hash: dict[str, tuple[Path, StrategySpec]] = {}
+    by_hash: dict[str, tuple[Path, StrategySpec, dict]] = {}
     unhashable = 0
-    for path, spec in recovered:
+    for path, spec, payload in recovered:
         try:
-            by_hash.setdefault(compute_strategy_hash(spec), (path, spec))
+            by_hash.setdefault(compute_strategy_hash(spec), (path, spec, payload))
         except Exception:
             unhashable += 1
     print(f"UNIQUE {len(by_hash)} distinct structural hash(es)"
@@ -238,8 +266,23 @@ def main() -> int:
     print(f"\nBASKET fast={basket_label} ({basket_h}) symbols={fast_basket}", flush=True)
     conn = initialize_db(str(_ROOT / "db" / "leaderboard.db"))
 
-    screened = 0
-    for h, (path, spec) in by_hash.items():
+    want_tf = None
+    if args.timeframes:
+        want_tf = {t.strip() for t in args.timeframes.split(",") if t.strip()}
+        deferred = [s for _, s, _p in by_hash.values() if not (set(s.timeframes) & want_tf)]
+        if deferred:
+            # No silent caps: say what was left out and why, or the run reads as
+            # "screened everything" when it screened a subset.
+            import collections
+            by = collections.Counter(tuple(s.timeframes) for s in deferred)
+            print(f"DEFERRED {len(deferred)} spec(s) outside --timeframes="
+                  f"{sorted(want_tf)}: {dict(by)}", flush=True)
+
+    screened = skipped_tf = 0
+    for h, (path, spec, payload) in by_hash.items():
+        if want_tf and not (set(spec.timeframes) & want_tf):
+            skipped_tf += 1
+            continue
         if args.limit and screened >= args.limit:
             print(f"LIMIT reached ({args.limit}); {len(by_hash) - screened} spec(s) "
                   f"left unscreened", flush=True)
@@ -249,6 +292,22 @@ def main() -> int:
         except TranslationError as e:
             print(f"XLATE-FAIL {spec.name} hash={h[:12]}: {str(e)[:120]}", flush=True)
             continue
+        try:
+            # Provenance: imported_from marks these as RECOVERED rather than
+            # freshly generated, so the leaderboard does not later imply the
+            # nightly loop produced them on 2026-08-21.
+            record_generation(
+                conn, spec, h,
+                to_generation_metadata(
+                    [_ArchivedLog(payload, path)],
+                    archetype=spec.archetype,
+                    spec_path=str(code_path),
+                ),
+                imported_from=f"recovered:{path.name}",
+            )
+        except Exception as e:
+            print(f"LB-WARN {spec.name} hash={h[:12]}: generation row not written "
+                  f"({str(e)[:100]}); fast row will not persist", flush=True)
         try:
             cls = _load_class(code_path, spec.name)
             fast = run_fast_evaluation(cls, backtest_config=_cfg(), conn=conn,
@@ -263,7 +322,8 @@ def main() -> int:
               f"trades={fast.n_oos_trades_total} src={path.name}", flush=True)
 
     conn.close()
-    print(f"\nDONE screened={screened} of {len(by_hash)} unique recovered spec(s)")
+    print(f"\nDONE screened={screened} of {len(by_hash)} unique recovered spec(s)"
+          + (f", {skipped_tf} deferred by --timeframes" if skipped_tf else ""))
     # Promotion is NOT automatic. ci_lower > 1.0 on a fast screen is the
     # generator's promotion gate (see project_generator_screens_on_ci_lower),
     # and promoting to canonical is a spend decision that stays with a human.

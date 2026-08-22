@@ -30,6 +30,7 @@ def record_evaluation_to_leaderboard(
     conn: Any,
     strategy_hash: str | None,
     eval_type: str,
+    imported_from: str | None = None,
 ) -> None:
     """Persist this evaluation to the leaderboard. Three early exits:
 
@@ -39,6 +40,14 @@ def record_evaluation_to_leaderboard(
       strategy_hash is None    — caller didn't supply one; DEBUG log so
                                  the absence is observable
       record_evaluation raises — log warning, swallow
+
+    imported_from tags the eval row's provenance. Defaults to None, which is
+    what the nightly generate-and-screen loop wants (those evals ARE freshly
+    generated). Callers that replay or re-screen archived specs pass a marker
+    — recover_stranded_generations.py passes 'recovered:<src_file>' — so a
+    later query can tell a replayed eval from a nightly one. Without it the
+    only discriminator is the evaluated_at window, which stops working as
+    soon as a replay overlaps a nightly run.
     """
     if conn is None:
         return
@@ -50,7 +59,9 @@ def record_evaluation_to_leaderboard(
         return
     try:
         record = to_evaluation_record(pipeline_result, eval_type=eval_type)
-        record_evaluation(conn, strategy_hash, record, eval_type)
+        record_evaluation(
+            conn, strategy_hash, record, eval_type, imported_from=imported_from
+        )
     except Exception as e:
         name = getattr(pipeline_result, "strategy_name", "<unknown>")
         logger.warning(

@@ -100,6 +100,7 @@ def run_fast_evaluation(
     conn: Any = None,
     strategy_hash: str | None = None,
     symbols: list[str] | None = None,
+    imported_from: str | None = None,
 ) -> FastEvaluationResult:
     """Fast/sanity evaluation. Small bootstrap/baseline, no parameter grid.
     Returns FastEvaluationResult.
@@ -115,7 +116,12 @@ def run_fast_evaluation(
     that justified diverse8_v1 used exactly this. The resulting row records
     whichever basket actually ran (see leaderboard.adapters), so an ad-hoc
     roster is recorded as unknown_<hash> rather than silently inheriting the
-    default's label."""
+    default's label.
+
+    imported_from: provenance marker for the recorded eval row, forwarded to
+    record_evaluation. None (the default) means "freshly generated", which is
+    correct for the nightly loop. Replay callers pass a marker — see
+    recover_stranded_generations.py."""
     basket = symbols if symbols is not None else FAST_BASKET
     if walk_config is None:
         walk_config = WalkForwardConfig(
@@ -176,6 +182,7 @@ def run_fast_evaluation(
         conn=conn,
         strategy_hash=strategy_hash,
         eval_type="fast",
+        imported_from=imported_from,
     )
 
     return fast

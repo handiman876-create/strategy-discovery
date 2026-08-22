@@ -292,10 +292,15 @@ def main() -> int:
         except TranslationError as e:
             print(f"XLATE-FAIL {spec.name} hash={h[:12]}: {str(e)[:120]}", flush=True)
             continue
+        # Provenance: imported_from marks these as RECOVERED rather than
+        # freshly generated, so the leaderboard does not later imply the
+        # nightly loop produced them on 2026-08-21. Bound once and applied to
+        # BOTH the generation row and the eval row below — tagging only the
+        # generation row (the state before 2026-08-22) left evaluations.
+        # imported_from NULL, indistinguishable from a nightly eval, so the
+        # only discriminator was the evaluated_at window.
+        provenance = f"recovered:{path.name}"
         try:
-            # Provenance: imported_from marks these as RECOVERED rather than
-            # freshly generated, so the leaderboard does not later imply the
-            # nightly loop produced them on 2026-08-21.
             record_generation(
                 conn, spec, h,
                 to_generation_metadata(
@@ -303,7 +308,7 @@ def main() -> int:
                     archetype=spec.archetype,
                     spec_path=str(code_path),
                 ),
-                imported_from=f"recovered:{path.name}",
+                imported_from=provenance,
             )
         except Exception as e:
             print(f"LB-WARN {spec.name} hash={h[:12]}: generation row not written "
@@ -311,7 +316,8 @@ def main() -> int:
         try:
             cls = _load_class(code_path, spec.name)
             fast = run_fast_evaluation(cls, backtest_config=_cfg(), conn=conn,
-                                       strategy_hash=h, symbols=fast_basket)
+                                       strategy_hash=h, symbols=fast_basket,
+                                       imported_from=provenance)
         except Exception as e:
             print(f"FAST-ERROR {spec.name} hash={h[:12]}: {str(e)[:120]}", flush=True)
             continue

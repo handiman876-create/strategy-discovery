@@ -31,3 +31,50 @@ A family of 18 similar specs showing max `ci_lower = 0.995` is **one finding sam
 Before reacting to a near-miss, check archetype diversity in the batch. If the top N rows share an archetype and timeframe, collapse them to one finding and treat the max as optimistically biased. This is the multiple-comparisons sibling of the high-PF / low-CI structural trap: promote on `ci_lower`, and discount the max of a correlated family further still.
 
 Corollary: `score` and `ci_lower` can disagree on the winner. In the same batch the only `score > 1.0` row (1.024) ranked *third* by `ci_lower`. `ci_lower` is the gate.
+
+## Seasonality prompt fix: working since 2026-09-04 (7 clean runs)
+
+2026-09-11: `usable_candidates=20`, `hits=0`, `spent=$0.4881`. Both seasonality candidates generated at `tf=['1d']` with thesis under 400 chars:
+
+- `atr_zscore_reversion_seasonality` — score=0.907, median_pf=1.342, ci_lower=0.815, n=573
+- `macd_percentrank_reversion_seasonality` — score=0.314, median_pf=0.886, ci_lower=0.194, n=126
+
+`ed38090` landed **2026-09-04 21:12 UTC**; the last seasonality GEN-FAIL was the 2026-09-04 07:0x run, i.e. pre-fix. Runs 09-05 through 09-11 have each generated both seasonality slots cleanly — today is the **7th consecutive clean run, not the first confirmation.**
+
+### 0.907 is NOT the highest-ever score for the family
+
+It ranks **3rd** of 80 seasonality evals with full metrics in `db/leaderboard.db`:
+
+| name | score | median_pf | ci_lower | n | date |
+|---|---|---|---|---|---|
+| `morning_open_momentum_seasonality` | 1.175 | 1.729 | 0.589 | 82 | 2026-07-16 |
+| `afternoon_momentum_seasonality` | 0.932 | 1.604 | 0.602 | 165 | 2026-07-18 |
+| `atr_zscore_reversion_seasonality` | 0.907 | 1.342 | 0.815 | 573 | 2026-09-11 |
+
+The July records predate the dated summaries (which start 2026-08-05) and exist only in the DB. **Rank a family from `leaderboard.db`, never from `logs/autodiscover_summary_*.json`** — the summary era is shorter than the eval history and makes stale figures look like records.
+
+What *is* a family record: **ci_lower 0.815**, beating 0.685 (`midday_ema_momentum_seasonality`, 08-15). That is the promotion metric, so it is the record worth having.
+
+### Gate status: score is the gate furthest out, not ci_lower
+
+`median_pf` and the trade floor both **pass**. Two gates fail (`src/evaluation/scoring.py:91-93`):
+
+| gate | required | actual | deficit |
+|---|---|---|---|
+| `score` | > 1.5 | 0.907 | **0.593** — furthest out |
+| `ci_lower` | > 1.0 | 0.815 | 0.185 — nearest |
+
+So "ci_lower is still the binding gate" is only half true for this spec: it is the *nearest* gate, while `score` is the one holding it back hardest. Consistent with backlog `32f285e`.
+
+### Not a sample-size problem
+
+`midday_ema_momentum_seasonality` (08-15) reached ci_lower 0.685 at n=572; today's spec reaches 0.815 at n=573. **Matched sample size, +0.13** — so the improvement is real and not an n artifact. But 19 seasonality specs have now cleared `median_pf>1.2` with n>=50, and 0.815 is the all-time maximum ci_lower across every one of them. Same high-PF / `ci_lower<1.0` signature as the last-hour/power-hour graveyard: treat as guilty until proven.
+
+### Still open — NOT fixed by ed38090
+
+The thesis<400 budget was added to the **seasonality prompt only**. On 2026-09-11 two generation attempts still died on `thesis String should have at most 400 characters`:
+
+- `microstructure` 07:03:41
+- `overnight_session` 07:41:55
+
+Retries covered both (`usable=20/20`), so the cost was API spend, not lost slots. **Generalize the thesis budget to every archetype prompt.**

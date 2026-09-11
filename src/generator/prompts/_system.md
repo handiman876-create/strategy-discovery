@@ -124,3 +124,17 @@ BAD — DO NOT do this (stringified form, will be rejected):
 The schema declares these fields as objects. Submitting a JSON-encoded string will fail validation and waste a retry.
 
 Strive for: a clearly stated thesis (≥20 chars), a few well-chosen indicators, simple entry/exit conditions that map to the thesis. Avoid: contrived combinations of unrelated indicators, parameters with no semantic role, conditions that contradict the archetype's spirit.
+
+**`thesis` length — 350-character budget, 400-character hard ceiling.**
+
+The schema enforces `max_length=400` on `thesis` (`src/generator/spec.py:183`). A thesis over 400 characters fails validation outright and burns a retry without the strategy ever being backtested — it is a wasted call, not a near miss.
+
+**Write to 350 characters.** The 50-character gap between that budget and the 400 ceiling is deliberate slack: it absorbs a long indicator name or a clause you tighten late. It is not room to spend.
+
+Two or three sentences. State the effect, the trigger, and the filter, then stop. A thesis is not the place to narrate what the DSL cannot express, to justify why the archetype is interesting, or to list formulations you considered and rejected. Every character spent on those is a character not spent on the strategy you are actually submitting.
+
+- ✓ 250–350 characters — the effect, the trigger, the filter, in three clauses
+- ✗ 351–400 characters — DO NOT aim here. It validates, but you have consumed the slack, and this is the band that overflows once a single clause grows.
+- ✗ over 400 characters — DO NOT do this; hard rejection, retry wasted
+
+This budget applies to EVERY archetype. The per-archetype prompt that follows may add the failure shape specific to it, but the numbers above are authoritative — 350 budget, 400 ceiling, 50 slack.

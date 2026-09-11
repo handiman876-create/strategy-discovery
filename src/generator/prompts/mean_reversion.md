@@ -11,6 +11,28 @@
 - Conditions that combine an "extended" signal (RSI low/high, z-score, BB band) with a "trend filter" (price vs SMA, ROC).
 - Asset classes: stocks, crypto.
 
+**Hard constraint — `thesis` must be at most 350 characters.** The schema's hard ceiling is 400 (`src/generator/spec.py:183`); 350 is your budget and the 50-character gap is deliberate slack, not room to spend. This archetype has never been rejected for thesis length — 0 in 1184 attempts — and the rule is here to keep it that way, not because it has a problem.
+
+It has come closer than the record suggests. This thesis was **accepted at exactly 400 characters** on 2026-08-09 — one character more and it would have been a wasted retry:
+
+**BAD — DO NOT write to the ceiling like this (400 chars, passed with zero slack):**
+```
+When a stock's 60-bar percent rank drops below 0.15 (price near its 60-day low)
+AND the EMA(10) is still above EMA(50) (medium-term trend intact), the short-term
+weakness is statistically overextended and likely to revert. Mirror logic:
+percent rank above 0.85 AND EMA(10) below EMA(50) signals overbought short-term,
+sell short. Exit on mean-reversion signal from percent rank crossing the midpoint.
+```
+Why it is a problem even though it validated: every threshold is transcribed from the spec, each indicator is glossed in parentheses, and the short side is written out in full. There is no margin — the same thesis with one more qualifying clause overflows.
+
+**GOOD — the same idea in 241 characters:**
+```
+Short-term weakness inside an intact medium-term uptrend is overextended rather
+than a trend change, so it reverts. Enter on a percent_rank(60) extreme while
+the EMA structure still favours the trend, mirrored short, exiting at the
+midpoint.
+```
+
 **Counter-examples (do NOT generate):**
 - Trend-following: "buy when 50-day MA crosses above 200-day MA" — that's momentum, not mean reversion.
 - Volatility breakouts: "buy when close exceeds 20-day high" — that's breakout, not reversion.

@@ -137,6 +137,41 @@ Only two specs have ever had both a fast and a canonical `ci_lower` recorded, an
 
 Both of those fast numbers are `tech5_v1` rows, i.e. the two known false positives — which is the point: clearing 1.0 at fast is necessary, not sufficient, and a spec **below** 1.0 at fast has no realistic canonical path. Do not spend canonical compute on a near-miss to "see if it gets over the line"; the fast gate exists to protect that budget. 11 canonical evals have ever run; zero strategies have survived one.
 
+## Basket sensitivity probe (2026-09-12)
+
+**FINDING: 5m intraday strategies are genuinely basket-insensitive.**
+
+- 21 5m pairs: mean \|Δ\| = **0.050**
+- 10 1d pairs: mean \|Δ\| = **0.428**
+- Welch t = **8.72** (8.6× ratio)
+- Holds across all four `ci_lower` buckets — **not** regression to the mean
+
+**IMPLICATION: it does not help promotion.**
+
+- **0 of 19** cleared the gate on `tech5_v1` — the basket that inflates 1d specs
+- 5m gets no beta-capture inflation: tech5's mechanism is daily-signal beta, which never reaches intraday scalps, so 5m sits below the gate on *both* rosters
+- Cohort `median_pf` on tech5 = **0.930**, below break-even (that figure excludes one PF 6.09 / n=53 artifact; including it the median is 0.975 and the mean 1.228, which is why the artifact is excluded rather than averaged in)
+- Basket-insensitivity ≠ edge
+
+**CONCLUSION: 5m scalps are robustly mediocre.** Selecting on basket-insensitivity directly is another form of gate-gaming. A strategy needs an edge first; basket-insensitivity is then a bonus, not a substitute.
+
+**DO NOT target 5m for basket-insensitivity.** Targeting it optimizes the robustness of a loss.
+
+Full per-spec table, per-bucket means, the `ln(n)` adjustment method and the outlier caveats are in "Do NOT turn the riser into a generator target" above — recorded in commit **b6f24c3**. This section is the summary; that one is the evidence.
+
+### Generator prompt guidance
+
+> 5m basket-insensitivity is confirmed but delivers PF ≈ 0.95 (below break-even). Do NOT generate 5m strategies targeting cross-symbol consistency — the consistency is real but the edge is not.
+
+**Not yet applied to the live prompts** — recorded here as guidance pending a decision, because editing `src/generator/prompts/` changes generation behavior rather than documenting a measurement.
+
+When that decision is taken, note that two live prompts currently push the *opposite* way, and the probe is evidence against both:
+
+- `src/generator/prompts/_system.md:72` — "Trade frequency is what makes the confidence interval narrow enough to clear the gate."
+- `src/generator/prompts/_system.md:3` — "Favor edges that fire often and win consistently over edges that are spectacular but rare."
+
+The second is sound as written (it targets `ci_lower` over PF). The first states the n-gaming mechanism as an instruction: frequency does narrow the interval, but narrowing the interval around a sub-1.0 point estimate cannot clear a gate at 1.0. The 19-spec cohort is what that instruction produces when followed to its limit — n up to 16,464, `ci_lower` up to 0.893, PF 0.930, nothing promoted. `_system.md:76` already carries the correct framing ("A strategy that makes money on SPY and loses money on PG has not found an edge — it has found beta"); the frequency claim at :72 needs the same treatment.
+
 ## Seasonality prompt fix: working since 2026-09-04 (7 clean runs)
 
 2026-09-11: `usable_candidates=20`, `hits=0`, `spent=$0.4881`. Both seasonality candidates generated at `tf=['1d']` with thesis under 400 chars:

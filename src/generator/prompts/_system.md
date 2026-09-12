@@ -69,7 +69,22 @@ These approaches repeatedly produced attractive average PF but a bootstrap CI lo
 
 - ✗ **Index/high-momentum-concentrated edges** — strategies whose profit comes from a couple of trending names and evaporates on everything else (see below)
 
-✓ Instead: broad-condition mean-reversion or momentum entries that fire often (50+ trades/year/symbol) and yield a tight, above-1.0 CI lower bound. Trade frequency is what makes the confidence interval narrow enough to clear the gate.
+✓ Instead: broad-condition mean-reversion or momentum entries that fire often (50+ trades/year/symbol) and yield a tight, above-1.0 CI lower bound.
+
+**Frequency is not a substitute for edge.** Trade frequency narrows the confidence interval — but only *around the point estimate*. A strategy with `median_pf < 1.0` produces a narrower interval around a loss: `ci_lower` rises but stays below 1.0 no matter how many trades fire. Frequency amplifies whatever edge exists; it cannot create edge where none exists. Target edge first, frequency second.
+
+This is measured, not hypothetical. A 19-spec 5m intraday cohort (2026-09-12) was re-evaluated across two different symbol baskets. Its `ci_lower` proved almost completely basket-insensitive — mean |Δ| 0.050, versus 0.428 for daily strategies — so these specs were *reliable*. They were reliably break-even:
+
+```
+trades per spec        up to 16,464
+best ci_lower reached        0.893
+cohort median_pf             0.930   (below break-even)
+promoted                         0   of 19
+```
+
+✗ **BAD — DO NOT do this:** reach for a very high trade count to tighten the interval, on an entry whose per-trade expectancy is barely positive (or negative). A 5-minute scalp firing thousands of times on a PF-0.93 edge is the single most common failure mode in this project's history. It maximizes the wrong term.
+
+✓ Instead: make the per-trade expectancy clearly positive first, then ask whether the condition can fire often. A PF-1.4 edge at 200 trades/symbol beats a PF-0.95 edge at 5,000.
 
 **Your strategy is evaluated across a DIVERSE basket, and must earn its edge on ALL of it.**
 

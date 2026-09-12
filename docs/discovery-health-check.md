@@ -102,7 +102,29 @@ The paired delta is real (same `strategy_hash` `0746c98b`, both baskets). Two pr
 
 `ci_lower` ≈ point estimate − interval half-width, and n shrinks the half-width. **"Maximize `ci_lower` by maximizing n" is therefore a way to game the gate rather than pass it**, and it aims the generator squarely at the close-auction / power-hour 5m family documented above: 14 variants, every one below 1.0, and 0-for-2 at canonical (`last_hour_momentum_seasonality`, `power_hour_momentum_seasonality`, both `promising=0`, 2026-07-06). A same-named sibling of the riser itself, `06e3b21cb58b` (08-09), came in at `ci_lower` 0.767 with **PF 0.959**.
 
-**What would actually test the hypothesis:** use `reeval_basket.py` to re-run a batch of existing 5m specs on `tech5_v1` and build a paired 5m delta distribution to compare against the 1d deltas above. That is fast-tier compute only, and it turns an n=1 anecdote into a real measurement. Until then, any timeframe preference should be matched on n — compare 5m and 1d specs inside the same trade-count bucket, never across the pooled populations.
+**Measured 2026-09-12 — the insensitivity is REAL, and it does not help.** 19 5m specs, stratified across the `ci_lower` range (`reeval_basket.py --basket tech5_v1 --timeframe 5m --stratify 0.0,0.5,0.7,0.85,1.0 --per-bucket 5 --seed 0`), tagged `imported_from=basket_sensitivity_probe_2026-09-12`. With the two pre-existing pairs that is 21 5m pairs against 10 1d pairs, one sign convention (`diverse8 − tech5`):
+
+| | 1d | 5m |
+|---|---|---|
+| pairs | 10 | 21 |
+| mean \|Δ\| | **0.428** | **0.050** |
+| median \|Δ\| | 0.403 | 0.032 |
+| mean n-adjusted Δ | −0.502 | **−0.017** |
+| rose on diverse8 | 0/10 | 14/21 |
+
+Welch t = **8.72** on mean \|Δ\|, an **8.6× ratio**. So 5m `ci_lower` is close to roster-invariant while 1d `ci_lower` is strongly roster-dependent. The hypothesis was right.
+
+**It is still not a generator target, for a better reason than the original one.** Of the 19 re-evaluated specs, **0 survived** the gate on `tech5_v1` — the very basket that inflated 1d specs above 1.0. The best `ci_lower` any 5m spec reached on tech5 was **0.893**, and cohort `median_pf` on tech5 was **0.930** (excluding one PF 6.09 / n=53 artifact that is itself the high-PF/low-CI signature). tech5's inflation mechanism is beta capture on daily signals; it does not touch intraday scalps, so they sit below the gate on *both* rosters.
+
+The conclusion is therefore **robustly mediocre, not robustly good**: 5m intraday mechanics really are basket-insensitive, and what they are insensitively delivering is PF ≈ 0.95. Targeting them would buy stability around break-even. Basket-insensitivity is a property worth *having* in a strategy that already has an edge — it is not itself an edge, and it should never be selected on directly.
+
+Per-bucket means confirm the effect holds across the range rather than only at the top (script convention here, `tech5 − diverse8`): [0.0, 0.5) −0.004 (n=4), [0.5, 0.7) +0.023 (n=5), [0.7, 0.85) +0.011 (n=5), [0.85, 1.0) −0.062 (n=5).
+
+**Two caveats on the outliers.** The two largest movers, `ed6ac9d89541` (+0.147) and `7036991ef30f` (+0.148), are the only two specs whose tech5 PF exceeds 1.0 (1.30, 1.09) *and* have the two smallest tech5 trade counts (918, 403). Genuine tech affinity and small-n instability both predict that, and this data cannot separate them — the n-adjustment corrects the expected shift from n, not the inflated variance at low n. Treat those two residuals as the least trustworthy in the set.
+
+Separately, the n-adjustment leans on a within-5m `ln(n)` fit with r=0.402, much weaker than the 1d fit's r=0.755, so 5m residuals carry more uncertainty than 1d ones. The headline result does not depend on the adjustment: raw \|Δ\| alone is 0.050 vs 0.428.
+
+Regardless of timeframe, any preference should still be matched on n — compare 5m and 1d specs inside the same trade-count bucket, never across the pooled populations.
 
 ### Corollary: a fast clearance does not survive canonical either
 

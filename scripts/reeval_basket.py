@@ -7,12 +7,21 @@ Rather than backfill 221 rows (most of which were nowhere near the gate), this
 re-evaluates only the near-misses worth a second look, writing NEW rows tagged
 with the new basket_version. Old rows are left exactly as they are.
 
-Selection: strategies whose BEST fast ci_lower on the old basket exceeds
+Selection: strategies whose BEST fast ci_lower on a DIFFERENT basket exceeds
 --ci-min, that have >= --trades-min OOS trades, and that have not already been
-re-evaluated on the current basket. Ordered by ci_lower descending.
+re-evaluated on the target basket. Ordered by ci_lower descending.
+
+--basket names the basket to RUN on (default: the current FAST_BASKET). It can
+name a retired basket, which is what makes this usable as a paired
+basket-sensitivity probe rather than only a forward migration: pointing it at
+tech5_v1 with --timeframe 5m re-runs today's 5m cohort on the old roster and
+yields a paired delta per spec. Pair it with --note so the resulting rows are
+distinguishable from that basket's original era in the leaderboard.
 
 Cost: $0 API — no generation, no LLM calls. Local compute over cached parquet.
 Usage: reeval_basket.py [--ci-min 0.80] [--trades-min 50] [--dry-run]
+                        [--basket tech5_v1] [--timeframe 5m] [--limit N]
+                        [--note probe-label]
 """
 from __future__ import annotations
 
@@ -29,7 +38,7 @@ sys.path.insert(0, str(_ROOT))
 
 from engine.backtester import BacktestConfig
 from engine.session import RegularTradingHours
-from evaluation.baskets import FAST_BASKET, basket_identity
+from evaluation.baskets import FAST_BASKET, KNOWN_BASKETS, basket_identity
 from evaluation.fast_pipeline import run_fast_evaluation
 from generator.spec import StrategySpec
 from generator.translator import translate_to_file
@@ -58,9 +67,25 @@ def main() -> int:
     ap.add_argument("--trades-min", type=int, default=50)
     ap.add_argument("--dry-run", action="store_true",
                     help="List the cohort and exit; write nothing.")
+    ap.add_argument("--basket", default=None, choices=sorted(KNOWN_BASKETS),
+                    help="Basket to RUN on. Defaults to FAST_BASKET "
+                         "(diverse8_v1). Naming a retired basket turns this "
+                         "into a paired sensitivity probe — see module docstring.")
+    ap.add_argument("--timeframe", default=None,
+                    help="Restrict the cohort to one timeframe (e.g. 5m). "
+                         "ci_lower is confounded with trade count, so a mixed-"
+                         "timeframe cohort mixes two delta distributions.")
+    ap.add_argument("--limit", type=int, default=None,
+                    help="Cap cohort size (highest ci_lower first). Use to time "
+                         "a few evals before committing to the full cohort.")
+    ap.add_argument("--note", default=None,
+                    help="Provenance marker written to each row's "
+                         "imported_from. Set this for probe runs so the rows "
+                         "are separable from that basket's original era.")
     args = ap.parse_args()
 
-    label, bhash = basket_identity(FAST_BASKET)
+    target_basket = KNOWN_BASKETS[args.basket] if args.basket else FAST_BASKET
+    label, bhash = basket_identity(target_basket)
     conn = initialize_db(str(_ROOT / "db" / "leaderboard.db"))
     conn.row_factory = sqlite3.Row
 
@@ -77,6 +102,7 @@ def main() -> int:
          WHERE e.eval_type = 'fast'
            AND e.ci_lower IS NOT NULL
            AND e.basket_version != ?
+           AND (? IS NULL OR s.timeframe = ?)
            AND s.strategy_hash NOT IN (
                  SELECT strategy_hash FROM evaluations
                   WHERE eval_type = 'fast' AND basket_version = ?
@@ -85,12 +111,18 @@ def main() -> int:
         HAVING best_ci > ? AND best_n >= ?
          ORDER BY best_ci DESC
         """,
-        (label, label, args.ci_min, args.trades_min),
+        (label, args.timeframe, args.timeframe, label,
+         args.ci_min, args.trades_min),
     ).fetchall()
+    if args.limit:
+        rows = rows[:args.limit]
 
     print(f"=== RE-EVAL COHORT: basket {label} ({bhash}) ===")
-    print(f"  symbols: {FAST_BASKET}")
-    print(f"  criteria: old-basket ci_lower > {args.ci_min}, n_oos >= {args.trades_min}")
+    print(f"  symbols: {target_basket}")
+    print(f"  criteria: other-basket ci_lower > {args.ci_min}, n_oos >= {args.trades_min}"
+          + (f", timeframe={args.timeframe}" if args.timeframe else ""))
+    if args.note:
+        print(f"  provenance: imported_from={args.note}")
     print(f"  cohort size: {len(rows)}\n")
     if args.dry_run:
         for r in rows:
@@ -98,10 +130,13 @@ def main() -> int:
                   f"n={r['best_n']:<5} {r['name'][:34]:<34} {r['archetype']}")
         return 0
 
-    print(f"{'hash':<14}{'name':<34}{'old_ci':>8}{'new_ci':>8}{'new_pf':>8}"
-          f"{'score':>8}{'n':>6}  verdict")
-    print("-" * 96)
+    # flush=True on the per-spec line: a 5m cohort runs minutes per spec, so an
+    # unflushed run is indistinguishable from a hung one for hours.
+    print(f"{'hash':<14}{'name':<34}{'old_ci':>8}{'new_ci':>8}{'delta':>8}"
+          f"{'new_pf':>8}{'score':>8}{'n':>6}  verdict", flush=True)
+    print("-" * 104, flush=True)
     survivors, failures = [], []
+    deltas: list[float] = []
     for r in rows:
         spec = StrategySpec.model_validate(json.loads(r["spec_json"]))
         try:
@@ -112,7 +147,8 @@ def main() -> int:
             cls = getattr(mod, _class_name(spec.name))
             fast = run_fast_evaluation(
                 cls, backtest_config=_cfg(), conn=conn,
-                strategy_hash=r["strategy_hash"], symbols=FAST_BASKET,
+                strategy_hash=r["strategy_hash"], symbols=target_basket,
+                imported_from=args.note,
             )
         except Exception as e:
             print(f"{r['strategy_hash'][:12]:<14}{r['name'][:34]:<34}  ERROR {str(e)[:40]}")
@@ -125,15 +161,35 @@ def main() -> int:
             and fast.breakdown.score > 1.5
         )
         (survivors if survived else failures).append((r, fast))
+        delta = fast.ci_lower - r["best_ci"]
+        deltas.append(delta)
         print(f"{r['strategy_hash'][:12]:<14}{r['name'][:34]:<34}"
-              f"{r['best_ci']:>8.3f}{fast.ci_lower:>8.3f}{fast.median_pf:>8.2f}"
+              f"{r['best_ci']:>8.3f}{fast.ci_lower:>8.3f}{delta:>+8.3f}"
+              f"{fast.median_pf:>8.2f}"
               f"{fast.breakdown.score:>8.3f}{fast.n_oos_trades_total:>6}"
-              f"  {'SURVIVED' if survived else 'screened-out'}")
+              f"  {'SURVIVED' if survived else 'screened-out'}", flush=True)
 
     print(f"\n--- SUMMARY ---")
     print(f"  re-evaluated : {len(survivors) + len(failures)}")
     print(f"  survived     : {len(survivors)}")
     print(f"  screened out : {len(failures)}")
+
+    # Paired delta distribution. This is the probe's actual output when --basket
+    # names a retired roster: per-spec ci_lower change, same spec, same data
+    # window, only the symbol roster differing.
+    if deltas:
+        deltas_sorted = sorted(deltas)
+        mean = sum(deltas) / len(deltas)
+        mid = len(deltas_sorted) // 2
+        median = (deltas_sorted[mid] if len(deltas_sorted) % 2
+                  else (deltas_sorted[mid - 1] + deltas_sorted[mid]) / 2)
+        print(f"\n--- PAIRED DELTA (new_ci - old_ci) ---")
+        print(f"  n        : {len(deltas)}")
+        print(f"  dropped  : {sum(1 for d in deltas if d < 0)}")
+        print(f"  rose     : {sum(1 for d in deltas if d > 0)}")
+        print(f"  mean     : {mean:+.3f}")
+        print(f"  median   : {median:+.3f}")
+        print(f"  min/max  : {deltas_sorted[0]:+.3f} / {deltas_sorted[-1]:+.3f}")
     if survivors:
         print(f"\n  canonical candidates:")
         for r, f in survivors:

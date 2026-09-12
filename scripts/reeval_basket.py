@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import random
 import sqlite3
 import sys
 from pathlib import Path
@@ -78,6 +79,19 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=None,
                     help="Cap cohort size (highest ci_lower first). Use to time "
                          "a few evals before committing to the full cohort.")
+    ap.add_argument("--stratify", default=None,
+                    help="Comma-separated ci_lower bucket edges, e.g. "
+                         "'0.0,0.5,0.7,0.85,1.0'. Samples --per-bucket specs "
+                         "from each bucket instead of taking the top N. A top-N "
+                         "cohort is selected on its home basket and so regresses "
+                         "downward on re-eval; stratifying spreads the cohort "
+                         "over the range so the delta is not confounded with "
+                         "selection. Overrides --limit.")
+    ap.add_argument("--per-bucket", type=int, default=5)
+    ap.add_argument("--seed", type=int, default=0,
+                    help="Seed for stratified sampling. Fixed so a probe is "
+                         "reproducible — the cohort must be re-derivable from "
+                         "the command line alone.")
     ap.add_argument("--note", default=None,
                     help="Provenance marker written to each row's "
                          "imported_from. Set this for probe runs so the rows "
@@ -114,7 +128,19 @@ def main() -> int:
         (label, args.timeframe, args.timeframe, label,
          args.ci_min, args.trades_min),
     ).fetchall()
-    if args.limit:
+    strata: list[tuple[str, int, int]] = []   # (label, available, sampled)
+    if args.stratify:
+        edges = [float(x) for x in args.stratify.split(",")]
+        rng = random.Random(args.seed)
+        picked = []
+        for lo, hi in zip(edges, edges[1:]):
+            bucket = [r for r in rows if lo <= r["best_ci"] < hi]
+            take = bucket if len(bucket) <= args.per_bucket else rng.sample(
+                bucket, args.per_bucket)
+            strata.append((f"[{lo}, {hi})", len(bucket), len(take)))
+            picked.extend(take)
+        rows = sorted(picked, key=lambda r: r["best_ci"], reverse=True)
+    elif args.limit:
         rows = rows[:args.limit]
 
     print(f"=== RE-EVAL COHORT: basket {label} ({bhash}) ===")
@@ -123,6 +149,10 @@ def main() -> int:
           + (f", timeframe={args.timeframe}" if args.timeframe else ""))
     if args.note:
         print(f"  provenance: imported_from={args.note}")
+    if strata:
+        print(f"  stratified: per-bucket={args.per_bucket} seed={args.seed}")
+        for lbl, avail, took in strata:
+            print(f"    {lbl:<14} available={avail:<4} sampled={took}")
     print(f"  cohort size: {len(rows)}\n")
     if args.dry_run:
         for r in rows:
@@ -137,6 +167,7 @@ def main() -> int:
     print("-" * 104, flush=True)
     survivors, failures = [], []
     deltas: list[float] = []
+    by_ci: list[tuple[float, float]] = []   # (old_ci, delta) for per-bucket means
     for r in rows:
         spec = StrategySpec.model_validate(json.loads(r["spec_json"]))
         try:
@@ -163,6 +194,7 @@ def main() -> int:
         (survivors if survived else failures).append((r, fast))
         delta = fast.ci_lower - r["best_ci"]
         deltas.append(delta)
+        by_ci.append((r["best_ci"], delta))
         print(f"{r['strategy_hash'][:12]:<14}{r['name'][:34]:<34}"
               f"{r['best_ci']:>8.3f}{fast.ci_lower:>8.3f}{delta:>+8.3f}"
               f"{fast.median_pf:>8.2f}"
@@ -190,6 +222,20 @@ def main() -> int:
         print(f"  mean     : {mean:+.3f}")
         print(f"  median   : {median:+.3f}")
         print(f"  min/max  : {deltas_sorted[0]:+.3f} / {deltas_sorted[-1]:+.3f}")
+
+        # Mean delta per old-basket ci_lower bucket. The question this answers:
+        # does the effect hold across the range, or only where the old basket
+        # already scored high (which would make it regression to the mean)?
+        edges = ([float(x) for x in args.stratify.split(",")]
+                 if args.stratify else [0.0, 0.5, 0.7, 0.85, 1.0])
+        print(f"\n  mean delta by old ci_lower bucket:")
+        for lo, hi in zip(edges, edges[1:]):
+            b = [d for c, d in by_ci if lo <= c < hi]
+            if b:
+                print(f"    [{lo}, {hi})   n={len(b):<3} mean={sum(b)/len(b):+.3f}"
+                      f"  dropped={sum(1 for d in b if d < 0)}/{len(b)}")
+            else:
+                print(f"    [{lo}, {hi})   n=0   —")
     if survivors:
         print(f"\n  canonical candidates:")
         for r, f in survivors:

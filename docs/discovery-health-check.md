@@ -32,6 +32,30 @@ Before reacting to a near-miss, check archetype diversity in the batch. If the t
 
 Corollary: `score` and `ci_lower` can disagree on the winner. In the same batch the only `score > 1.0` row (1.024) ranked *third* by `ci_lower`. `ci_lower` is the gate.
 
+## `ci_lower` is not comparable across baskets
+
+**Don't compare `tech5_v1` and `diverse8_v1` `ci_lower` values directly.** Grouped by `basket_version` over fast evals with `n_oos_trades >= 50` (verified 2026-09-12):
+
+| basket | symbols | n≥50 fast evals | max `ci_lower` | count ≥ 1.0 |
+|---|---|---|---|---|
+| `tech5_v1` | 5 | 44 | **1.145** | **3** |
+| `diverse8_v1` | 8 | 867 | **0.995** | **0** |
+
+Every fast-gate clearance in the project's history is a July `tech5_v1` eval — `rsi_ema_reversion_1d` (1.145), `overnight_rsi_trend_filter` (1.063), `daily_macd_hist_roc_momentum` (1.042). The current 8-symbol basket has **never cleared 1.0 in 867 evals**; its all-time ceiling is 0.995 (`close_auction_rsi_bb_reversion_scalp`, 08-22 — and see the multiple-comparisons section above, that 0.995 is a max-of-sweep).
+
+The narrower basket wins by construction: fewer, more correlated symbols means less cross-sectional disagreement for the bootstrap to price in, so the lower bound sits higher for the same underlying edge. A `tech5_v1` 1.145 and a `diverse8_v1` 0.995 are not 0.15 apart on a common scale — they are two different measurements. **"All-time best `ci_lower`" is two questions, not one.** Always group by `basket_version` before claiming a record.
+
+### Corollary: a fast clearance does not survive canonical either
+
+Only two specs have ever had both a fast and a canonical `ci_lower` recorded, and both fell hard:
+
+| name | fast `ci_lower` | canonical `ci_lower` | promising |
+|---|---|---|---|
+| `rsi_ema_reversion_1d` | 1.145 | **0.967** | 0 |
+| `daily_price_sma_zscore_momentum` | 1.054 | **0.314** | 0 |
+
+So fast `ci_lower` systematically *overstates* canonical `ci_lower`. Clearing 1.0 at fast is necessary, not sufficient — and a spec **below** 1.0 at fast has no realistic canonical path. Do not spend canonical compute on a near-miss to "see if it gets over the line"; the fast gate exists to protect that budget. 11 canonical evals have ever run; zero strategies have survived one.
+
 ## Seasonality prompt fix: working since 2026-09-04 (7 clean runs)
 
 2026-09-11: `usable_candidates=20`, `hits=0`, `spent=$0.4881`. Both seasonality candidates generated at `tf=['1d']` with thesis under 400 chars:

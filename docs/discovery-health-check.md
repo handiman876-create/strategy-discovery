@@ -43,7 +43,42 @@ Corollary: `score` and `ci_lower` can disagree on the winner. In the same batch 
 
 Every fast-gate clearance in the project's history is a July `tech5_v1` eval — `rsi_ema_reversion_1d` (1.145), `overnight_rsi_trend_filter` (1.063), `daily_macd_hist_roc_momentum` (1.042). The current 8-symbol basket has **never cleared 1.0 in 867 evals**; its all-time ceiling is 0.995 (`close_auction_rsi_bb_reversion_scalp`, 08-22 — and see the multiple-comparisons section above, that 0.995 is a max-of-sweep).
 
-The narrower basket wins by construction: fewer, more correlated symbols means less cross-sectional disagreement for the bootstrap to price in, so the lower bound sits higher for the same underlying edge. A `tech5_v1` 1.145 and a `diverse8_v1` 0.995 are not 0.15 apart on a common scale — they are two different measurements. **"All-time best `ci_lower`" is two questions, not one.** Always group by `basket_version` before claiming a record.
+The narrower basket wins by construction: `tech5_v1` was 3/5 high-beta tech and **over-promoted beta as signal** (`src/evaluation/baskets.py:11`). A `tech5_v1` 1.145 and a `diverse8_v1` 0.995 are not 0.15 apart on a common scale — they are two different measurements. **"All-time best `ci_lower`" is two questions, not one.** Always group by `basket_version` before claiming a record.
+
+### DO NOT lower the 1.0 threshold to "restore" the old pass rate
+
+The 0-for-867 above is the single most misreadable number in this doc. It looks like evidence the gate is too hard. It is not — **the `tech5_v1` clearances were the false positives, and screening them out is why the basket was switched on 2026-07-17.** From `baskets.py:11-22`:
+
+```
+                          d0cc300e5c07      fdc88ceb54fd
+    tech5_v1 (fast)         ci 1.054  ->      ci 1.145      both promoted
+    diverse8_v1 (fast)      ci 0.218  ->      ci 0.634      both screened out
+    sp500_phase2_seed42     ci 0.288  ->      ci 0.963      both FAILED canonical
+```
+
+`diverse8_v1` reproduces the canonical verdict; `tech5_v1` contradicted it twice and burned canonical compute both times. `diverse8_v1` is a strict subset of the canonical roster, which is why it *predicts* rather than merely differs.
+
+**Measured size of the correction.** `reeval_basket.py` re-ran 11 strategies on both baskets on 2026-07-17. 10 of 11 dropped; mean delta **−0.388**:
+
+| name | tech5_v1 | diverse8_v1 | Δ |
+|---|---|---|---|
+| `daily_sma_cross_roc_momentum` | 0.833 | 0.148 | −0.685 |
+| `daily_macd_hist_roc_momentum` | 1.042 | 0.463 | −0.579 |
+| `rsi_ema_reversion_1d` | 1.145 | 0.634 | −0.511 |
+| `rsi_macd_reversion_1d` | 0.880 | 0.434 | −0.446 |
+| `rsi_sma_reversion_1d` | 0.937 | 0.527 | −0.410 |
+| `rsi_sma_cross_reversion_1d` | 0.920 | 0.524 | −0.396 |
+| `daily_macd_hist_roc126_momentum` | 0.965 | 0.569 | −0.396 |
+| `overnight_rsi_trend_filter` | 1.063 | 0.746 | −0.317 |
+| `roc_ema_rsi_reversion_1d` | 0.825 | 0.549 | −0.276 |
+| `roc_sma_reversion_1d` | 0.899 | 0.632 | −0.267 |
+| `late_morning_rsi_reversion_scalp` | 0.806 | 0.823 | **+0.017** |
+
+`n_oos_trades` went *up* on `diverse8_v1` (more symbols) while `ci_lower` went *down*, so this is cross-sectional dispersion, not sampling. Per `baskets.py:42`, PG and QCOM are the names doing the work: both failed canonical at PF 0.54/0.56 on the spec `tech5_v1` rated 1.145.
+
+Shifting the threshold by −0.388 to recover the old pass rate would recover the old false-positive rate exactly. Read 0-for-867 alongside **zero strategies having ever passed canonical** (11 canonical evals, 2 `promising`, both superseded partials): the consistent reading is that the generator has not yet produced a real edge. The gate is doing its job.
+
+Note the one riser: `late_morning_rsi_reversion_scalp`, a 5m scalp at n=3322. High-n intraday scalps appear basket-insensitive while every 1d strategy collapsed — worth keeping in view, but it is one case.
 
 ### Corollary: a fast clearance does not survive canonical either
 
@@ -54,7 +89,7 @@ Only two specs have ever had both a fast and a canonical `ci_lower` recorded, an
 | `rsi_ema_reversion_1d` | 1.145 | **0.967** | 0 |
 | `daily_price_sma_zscore_momentum` | 1.054 | **0.314** | 0 |
 
-So fast `ci_lower` systematically *overstates* canonical `ci_lower`. Clearing 1.0 at fast is necessary, not sufficient — and a spec **below** 1.0 at fast has no realistic canonical path. Do not spend canonical compute on a near-miss to "see if it gets over the line"; the fast gate exists to protect that budget. 11 canonical evals have ever run; zero strategies have survived one.
+Both of those fast numbers are `tech5_v1` rows, i.e. the two known false positives — which is the point: clearing 1.0 at fast is necessary, not sufficient, and a spec **below** 1.0 at fast has no realistic canonical path. Do not spend canonical compute on a near-miss to "see if it gets over the line"; the fast gate exists to protect that budget. 11 canonical evals have ever run; zero strategies have survived one.
 
 ## Seasonality prompt fix: working since 2026-09-04 (7 clean runs)
 

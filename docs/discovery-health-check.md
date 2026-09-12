@@ -78,7 +78,31 @@ The 0-for-867 above is the single most misreadable number in this doc. It looks 
 
 Shifting the threshold by −0.388 to recover the old pass rate would recover the old false-positive rate exactly. Read 0-for-867 alongside **zero strategies having ever passed canonical** (11 canonical evals, 2 `promising`, both superseded partials): the consistent reading is that the generator has not yet produced a real edge. The gate is doing its job.
 
-Note the one riser: `late_morning_rsi_reversion_scalp`, a 5m scalp at n=3322. High-n intraday scalps appear basket-insensitive while every 1d strategy collapsed — worth keeping in view, but it is one case.
+Note the one riser: `late_morning_rsi_reversion_scalp`, a 5m scalp at n=3322. High-n intraday scalps appear basket-insensitive while every 1d strategy collapsed — worth keeping in view, but it is one case. See the next section before acting on it.
+
+### Do NOT turn the riser into a generator target: `ci_lower` rises with n
+
+**Candidate direction considered 2026-09-12 and NOT adopted:** "target high-N intraday 5m scalps with cross-symbol consistency — `late_morning_rsi_reversion_scalp` was the only strategy to rise on `diverse8_v1` (0.806 → 0.823, n=3322); hypothesis: intraday mechanics are more basket-insensitive than 1d signals."
+
+The paired delta is real (same `strategy_hash` `0746c98b`, both baskets). Two problems make it unsafe to steer the generator on.
+
+**1. The evidence is n=1 and the cross-sectional support is confounded by sample size.** Only 1 of the 11 paired specs is 5m, so basket sensitivity by timeframe is *untested*, not established, and +0.017 is well inside noise. The tempting confirmation — 5m specs average a much higher `ci_lower` on `diverse8_v1` than 1d specs — is an n effect. `ci_lower` rises monotonically with trade count, and the gradient holds **within 5m alone**, so it is not about the timeframe:
+
+| `n_oos_trades` | all specs, avg `ci_lower` | 5m only, avg `ci_lower` |
+|---|---|---|
+| 50–200 | 0.287 (n=551) | 0.403 (n=3) |
+| 200–500 | 0.429 (n=158) | — |
+| 500–1,500 | 0.652 (n=60) | 0.606 (n=16) |
+| 1,500–3,000 | 0.789 (n=30) | 0.789 (n=30) |
+| 3,000+ | 0.744 (n=68) | 0.744 (n=68) |
+
+5m specs average **n=4,242**; 1d specs average **n=192**. That alone accounts for the 5m/1d split (avg `ci_lower` 0.728 vs 0.339).
+
+**2. The 5m population has worse profitability, not better.** Average `median_pf` on `diverse8_v1` is **0.949 for 5m** — below break-even — vs **1.096 for 1d**. In the 3,000+ trade bucket average PF is **0.912**. So high-n scalps earn their `ci_lower` by having a narrow interval around a *worse* point estimate, not a stronger edge.
+
+`ci_lower` ≈ point estimate − interval half-width, and n shrinks the half-width. **"Maximize `ci_lower` by maximizing n" is therefore a way to game the gate rather than pass it**, and it aims the generator squarely at the close-auction / power-hour 5m family documented above: 14 variants, every one below 1.0, and 0-for-2 at canonical (`last_hour_momentum_seasonality`, `power_hour_momentum_seasonality`, both `promising=0`, 2026-07-06). A same-named sibling of the riser itself, `06e3b21cb58b` (08-09), came in at `ci_lower` 0.767 with **PF 0.959**.
+
+**What would actually test the hypothesis:** use `reeval_basket.py` to re-run a batch of existing 5m specs on `tech5_v1` and build a paired 5m delta distribution to compare against the 1d deltas above. That is fast-tier compute only, and it turns an n=1 anecdote into a real measurement. Until then, any timeframe preference should be matched on n — compare 5m and 1d specs inside the same trade-count bucket, never across the pooled populations.
 
 ### Corollary: a fast clearance does not survive canonical either
 

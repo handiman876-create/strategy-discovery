@@ -65,7 +65,7 @@ CANARY_MIN_BATCH = 10
 
 ARCHETYPES = [
     "mean_reversion", "microstructure", "momentum",
-    "overnight_session", "seasonality", "volatility_breakout",
+    "overnight_session", "seasonality", "volatility_breakout", "volume",
 ]  # 'pairs' excluded — translator defers it (multi-symbol position mgmt).
 
 # Weighted round-robin. Deterministic (no RNG) so runs stay reproducible.
@@ -105,6 +105,9 @@ ARCHETYPE_WEIGHTS = {
     "volatility_breakout": 1,  # 2->1  81% of its 1h specs took zero trades; Fix 3 gates
                                #       those now, so its real rate is still unknown
     "seasonality": 1,          # 1->1  unchanged; n=8, least evidence either way
+    "volume": 2,               # added 2026-09-23 (e214af3), n=0. The only family
+                               #       whose signal isn't price-derived; weighted
+                               #       as an exploration bet, not on evidence.
 }
 # Expanded to a flat schedule so `i % len` draws in the weighted proportion.
 _WEIGHTED_ARCHETYPES = [a for a, w in ARCHETYPE_WEIGHTS.items() for _ in range(w)]

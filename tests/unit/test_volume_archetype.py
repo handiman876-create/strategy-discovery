@@ -126,6 +126,20 @@ def test_archetype_registries_agree():
     assert set(ARCHETYPE_NAMES) == set(ARCHETYPES)
 
 
+def test_autodiscover_schedules_volume_at_weight_2():
+    """autodiscover keeps its own hand-written archetype list; a new archetype
+    missing from it is never generated nightly."""
+    import importlib.util
+
+    script = Path(__file__).resolve().parents[2] / "scripts" / "autodiscover.py"
+    spec = importlib.util.spec_from_file_location("autodiscover_script", script)
+    ad = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ad)
+    assert ad.ARCHETYPE_WEIGHTS["volume"] == 2
+    assert "volume" in ad.ARCHETYPES
+    assert set(ad.ARCHETYPE_WEIGHTS) <= set(ARCHETYPES)
+
+
 def test_prompt_states_350_char_budget_and_1d():
     text = PROMPT_PATH.read_text()
     assert "at most 350 characters" in text

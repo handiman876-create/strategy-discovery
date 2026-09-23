@@ -335,6 +335,18 @@ def translate_to_file(spec: StrategySpec, *, overwrite: bool = True) -> Path:
     return path
 
 
+def _referenced_indicator_aliases(node: Any) -> set[str]:
+    if isinstance(node, IndicatorRef):
+        return {node.name}
+    if isinstance(node, Compare):
+        return _referenced_indicator_aliases(node.lhs) | _referenced_indicator_aliases(node.rhs)
+    if isinstance(node, (And, Or)):
+        return set().union(*(_referenced_indicator_aliases(a) for a in node.args))
+    if isinstance(node, Not):
+        return _referenced_indicator_aliases(node.arg)
+    return set()
+
+
 def validate_for_translation(spec: StrategySpec) -> None:
     arch = get_archetype(spec.archetype)
     if spec.archetype == "pairs":
@@ -358,6 +370,22 @@ def validate_for_translation(spec: StrategySpec) -> None:
         if ind.type not in ALLOWED_INDICATORS:
             raise TranslationError(f"indicator type {ind.type!r} not in allowed set")
         _validate_indicator_kwargs(ind.type, ind.params)
+    if arch.required_indicators:
+        # Declared-but-unused would satisfy a declaration-only check, so the
+        # required type must be referenced in an ENTRY expression.
+        alias_type = {i.name: i.type for i in spec.indicators}
+        entry_types = {
+            alias_type.get(alias)
+            for expr in (spec.entry_long, spec.entry_short)
+            if expr is not None
+            for alias in _referenced_indicator_aliases(expr)
+        }
+        if not entry_types & set(arch.required_indicators):
+            raise TranslationError(
+                f"archetype {spec.archetype!r} requires at least one of "
+                f"{list(arch.required_indicators)} in entry_long/entry_short as the "
+                f"primary signal; entry rules reference: {sorted(t for t in entry_types if t)}"
+            )
 
     # An unsatisfiable clause in an ENTRY field means the strategy can never open
     # a position — a dead spec (e.g. `percent_rank(x) > 65` when percent_rank is

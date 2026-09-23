@@ -34,7 +34,14 @@ ALLOWED_INDICATORS: tuple[str, ...] = (
     "daily_return",
     "percent_rank",
     "zscore",
+    "obv_zscore",
+    "vwap_dev",
 )
+
+# Indicators that read `Bar.volume`. The `volume` archetype requires at least
+# one of these in every spec so volume is the driver, not a decoration on a
+# price-only rule.
+VOLUME_INDICATORS: frozenset[str] = frozenset({"obv_zscore", "vwap_dev"})
 
 # Indicators that only make sense on daily-bar strategies.
 DAILY_ONLY_INDICATORS: frozenset[str] = frozenset({"daily_return"})
@@ -284,6 +291,53 @@ def zscore(bars: Sequence["Bar"], period: int = 20) -> Optional[float]:
     return (closes[-1] - _mean(closes)) / s
 
 
+# ── Volume ───────────────────────────────────────────────────────────────────
+
+
+def obv_zscore(bars: Sequence["Bar"], period: int = 20) -> Optional[float]:
+    """Z-score of On-Balance Volume over the last `period` OBV values.
+
+    OBV is a running sum of volume × sign(close − prev_close). Its absolute
+    level depends on where the sum starts, but a z-score is invariant to a
+    constant offset, so starting the sum at the first of the last period+1
+    bars gives the same answer as starting it at the dawn of history."""
+    if len(bars) < period + 1:
+        return None
+    window = bars[-(period + 1):]
+    obv = 0.0
+    series: list[float] = []
+    for i in range(1, len(window)):
+        diff = window[i].close - window[i - 1].close
+        if diff > 0:
+            obv += window[i].volume
+        elif diff < 0:
+            obv -= window[i].volume
+        series.append(obv)
+    s = _std(series)
+    if s == 0:
+        return None
+    return (series[-1] - _mean(series)) / s
+
+
+def vwap_dev(bars: Sequence["Bar"], period: int = 20) -> Optional[float]:
+    """(close − rolling VWAP) / ATR(period), where rolling VWAP is
+    sum(close × volume) / sum(volume) over the last `period` bars.
+
+    ATR(period) needs period+1 bars, which sets the lookback. Returns None when
+    the window carries no volume or ATR is zero."""
+    if len(bars) < period + 1:
+        return None
+    window = bars[-period:]
+    total_vol = sum(b.volume for b in window)
+    if total_vol == 0:
+        return None
+    vwap = sum(b.close * b.volume for b in window) / total_vol
+    a = atr(bars, period)
+    if not a:
+        return None
+    return (bars[-1].close - vwap) / a
+
+
 INDICATOR_FUNCTIONS = {
     "sma": sma,
     "ema": ema,
@@ -299,6 +353,8 @@ INDICATOR_FUNCTIONS = {
     "daily_return": daily_return,
     "percent_rank": percent_rank,
     "zscore": zscore,
+    "obv_zscore": obv_zscore,
+    "vwap_dev": vwap_dev,
 }
 
 
@@ -320,6 +376,10 @@ _LOOKBACK_PARAMS: dict[str, tuple[str, ...]] = {
     "roc": ("period",),
     "percent_rank": ("period",),
     "zscore": ("period",),
+    # Both actually need period+1 bars (one prev_close / ATR's first TR),
+    # the same off-by-one atr already carries here.
+    "obv_zscore": ("period",),
+    "vwap_dev": ("period",),
     # MACD chains two EMAs: the signal line is an EMA(signal) *of* the
     # slow-EMA-derived series, so warm-up is additive, not max().
     "macd": ("slow", "signal"),

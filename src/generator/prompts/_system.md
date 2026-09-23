@@ -16,6 +16,7 @@ Hard rules:
   macd_signal(fast=12, slow=26, signal=9)
   macd_hist(fast=12, slow=26, signal=9)
   percent_rank(period=252)    zscore(period=20)
+  obv_zscore(period=20)       vwap_dev(period=20)
   ```
 
   Bollinger Bands take `k` (number of standard deviations), NOT `std`:
@@ -38,6 +39,7 @@ Hard rules:
 - `percent_rank(period=252)` returns a **fraction in [0, 1]** (0 = lowest in the lookback window, 1 = highest), **not** a 0–100 percentile. Compare it against fractional thresholds:
   - ✓ `percent_rank(period=60) > 0.9` (close near the 60-bar high)
   - ✗ `percent_rank(period=60) > 90` — always false; the value never exceeds 1.0
+- `obv_zscore` is the z-score of On-Balance Volume over `period` bars (standard deviations, unbounded, typically ±3). `vwap_dev` is `(close − rolling VWAP) / ATR`, both over `period` bars (ATR units, unbounded). Both read bar volume.
 - `daily_return` is only valid when the strategy's timeframes contain only `1d` (no intraday).
 - Parameter count ≤ 5; indicator count ≤ 4. Stay simple — fewer parameters is better.
 - No look-ahead. The DSL does not expose future bars; do not propose constructs that would need them.

@@ -30,6 +30,7 @@ ARCHETYPE_NAMES = (
     "pairs",
     "microstructure",
     "overnight_session",
+    "volume",
 )
 ASSET_CLASSES = ("stocks", "crypto")
 TIMEFRAMES = ("1m", "5m", "15m", "1h", "1d")

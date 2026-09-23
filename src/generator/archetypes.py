@@ -26,6 +26,10 @@ class ArchetypeDefinition:
     examples: list[str]
     counter_examples: list[str]
     notes: str = ""
+    # When non-empty, a spec must declare at least one indicator of these
+    # types. Enforced in translator.validate_for_translation so the rejection
+    # reason is fed back to the model as retry feedback.
+    required_indicators: tuple[str, ...] = ()
 
 
 ARCHETYPES: dict[str, ArchetypeDefinition] = {
@@ -209,6 +213,37 @@ ARCHETYPES: dict[str, ArchetypeDefinition] = {
             "specs but the translator emits a placeholder that runs only on bars where "
             "is_session_end() is True, with EOD exit."
         ),
+    ),
+    "volume": ArchetypeDefinition(
+        name="volume",
+        thesis=(
+            "Volume patterns are more universal than price patterns: institutional "
+            "accumulation and distribution show up across sectors regardless of price "
+            "trend. Volume (OBV, VWAP deviation) is the primary signal; price indicators "
+            "may only filter."
+        ),
+        references=[
+            "Joseph Granville, 'Granville's New Key to Stock Market Profits' (1963) — OBV",
+            "Berkowitz, Logue, Noser (1988), 'The Total Cost of Transactions on the NYSE' — VWAP",
+        ],
+        allowed_assets=["stocks"],
+        allowed_timeframes=["1d"],
+        examples=[
+            "obv_zscore(20) > 1.5 AND close > sma(50) → long; exit when obv_zscore(20) < 0.",
+            "vwap_dev(20) < -1.5 AND obv_zscore(20) > 0 → long (price below VWAP while "
+            "volume accumulates); exit when vwap_dev(20) > 0.",
+        ],
+        counter_examples=[
+            "EMA/RSI/MACD as the entry trigger with a volume indicator bolted on — that is "
+            "momentum or mean reversion wearing a volume costume.",
+            "Price-only strategies with no volume indicator (rejected outright).",
+            "Intraday VWAP scalps anchored to time-of-day (those are microstructure).",
+        ],
+        notes=(
+            "1d only. Buy-vs-sell volume delta is not computable from OHLCV bars, so it "
+            "is not offered; OBV's up-close/down-close split is the proxy."
+        ),
+        required_indicators=("obv_zscore", "vwap_dev"),
     ),
 }
 

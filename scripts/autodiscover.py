@@ -24,6 +24,7 @@ import importlib.util
 import json
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
@@ -124,6 +125,14 @@ def _load_class(code_path, spec_name):
     return getattr(mod, _class_name(spec_name))
 
 
+def _default_note(now: datetime | None = None) -> str:
+    """autodiscover_<YYYY-MM-DD>, UTC — the same clock the wrapper's dated
+    summary filename uses. Resolved ONCE at run start so a run that crosses
+    midnight keeps a single label."""
+    now = now or datetime.now(timezone.utc)
+    return f"autodiscover_{now.date().isoformat()}"
+
+
 def _cfg():
     return BacktestConfig(
         starting_capital=10_000, commission=0.0, slippage=0.01,
@@ -163,7 +172,11 @@ def main() -> int:
                          "documented 'outage vs bad batch' meaning; turn it on "
                          "in the systemd unit to make the timer go red instead "
                          "of only logging WARN.")
+    ap.add_argument("--note", default=None,
+                    help="Run label stored on every evaluation row "
+                         "(evaluations.note). Defaults to autodiscover_<UTC date>.")
     args = ap.parse_args()
+    note = args.note if args.note is not None else _default_note()
 
     load_dotenv(_ROOT / ".env", override=True)
     conn = initialize_db(str(_ROOT / "db" / "leaderboard.db"))
@@ -174,6 +187,7 @@ def main() -> int:
     fast_basket = KNOWN_BASKETS[args.basket] if args.basket else FAST_BASKET
     basket_label, basket_h = basket_identity(fast_basket)
     print(f"BASKET fast={basket_label} ({basket_h}) symbols={fast_basket}", flush=True)
+    print(f"NOTE {note}", flush=True)
 
     candidates, hits = [], []
     spent = 0.0
@@ -198,6 +212,7 @@ def main() -> int:
         Path(args.summary).write_text(json.dumps(
             {"basket_version": basket_label, "basket_hash": basket_h,
              "fast_symbols": fast_basket,
+             "note": note,
              "candidates": candidates, "hits": hits,
              "spent_usd": round(spent, 4),
              "usable_candidates": generated,
@@ -240,7 +255,8 @@ def main() -> int:
         try:
             cls = _load_class(gen.code_path, gen.spec.name)
             fast = run_fast_evaluation(cls, backtest_config=_cfg(), conn=conn,
-                                       strategy_hash=h, symbols=fast_basket)
+                                       strategy_hash=h, symbols=fast_basket,
+                                       note=note)
         except Exception as e:
             rec.update(stage="fast", error=str(e)[:200]); candidates.append(rec); flush()
             print(f"CAND {i} {gen.spec.name} FAST-ERROR {str(e)[:80]}", flush=True); continue
@@ -283,7 +299,7 @@ def main() -> int:
         try:
             canon = run_evaluation(cls, symbols=canon_symbols, backtest_config=_cfg(),
                                    walk_config=wf, output_root=_ROOT / "results",
-                                   conn=conn, strategy_hash=h)
+                                   conn=conn, strategy_hash=h, note=note)
         except Exception as e:
             rec.update(stage="canonical", error=str(e)[:200]); candidates.append(rec); flush()
             print(f"CAND {i} {gen.spec.name} CANON-ERROR {str(e)[:80]}", flush=True); continue

@@ -265,9 +265,13 @@ def record_evaluation(
     eval_type: str,
     *,
     imported_from: Optional[str] = None,
+    note: Optional[str] = None,
 ) -> int:
     """Persist one evaluation event and, if applicable, advance the strategy's
     status. Returns the new evaluation id.
+
+    note: free-text run label (`discover.py --note`), distinct from the
+    imported_from provenance marker — see migration 005.
 
     Auto-transition rules (from leaderboard.models.EVAL_TYPE_AUTO_TRANSITIONS):
         eval_type='fast'      moves status from 'generated' → 'fast_evaluated'
@@ -308,8 +312,9 @@ def record_evaluation(
             INSERT INTO evaluations (
                 strategy_hash, eval_type, evaluated_at, duration_seconds,
                 n_oos_trades, median_pf, score, ci_lower, promising, failed_gates,
-                results_dir, config_json, imported_from, basket_version, basket_hash
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                results_dir, config_json, imported_from, basket_version, basket_hash,
+                note
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 strategy_hash,
@@ -327,6 +332,7 @@ def record_evaluation(
                 imported_from,
                 result.basket_version,
                 result.basket_hash,
+                note,
             ),
         )
         eval_id = cur.lastrowid

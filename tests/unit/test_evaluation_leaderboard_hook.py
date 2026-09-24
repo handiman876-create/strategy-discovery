@@ -222,3 +222,17 @@ def test_to_evaluation_record_exception_also_swallowed(conn, caplog):
         and r.levelname == "WARNING"
         for r in caplog.records
     )
+
+
+# ── Run-label note ───────────────────────────────────────────────────────────
+
+
+def test_note_forwarded_to_eval_row(conn):
+    _seed_strategy(conn, "h1")
+    record_evaluation_to_leaderboard(
+        pipeline_result=_FakeFast(), conn=conn, strategy_hash="h1",
+        eval_type="fast", note="ab_test_arm_b",
+    )
+    row = conn.execute("SELECT note, imported_from FROM evaluations").fetchone()
+    assert row["note"] == "ab_test_arm_b"
+    assert row["imported_from"] is None

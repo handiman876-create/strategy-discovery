@@ -315,3 +315,26 @@ def test_transition_status_no_op_on_same_status(conn):
         "SELECT paper_started_at FROM strategies WHERE strategy_hash='h1'"
     ).fetchone()
     assert s["paper_started_at"] == "2026-01-01T00:00:00"
+
+
+# ── Run-label note (migration 005) ───────────────────────────────────────────
+
+
+def test_record_evaluation_stores_note(conn):
+    _insert_strategy(conn, "h1")
+    eid = record_evaluation(
+        conn, "h1", _result(), "fast", note="volume_first_test_2026-09-23"
+    )
+    row = conn.execute(
+        "SELECT note, imported_from FROM evaluations WHERE id = ?", (eid,)
+    ).fetchone()
+    assert row["note"] == "volume_first_test_2026-09-23"
+    # A labelled fresh eval is NOT a replay — provenance stays untouched.
+    assert row["imported_from"] is None
+
+
+def test_record_evaluation_note_defaults_to_null(conn):
+    _insert_strategy(conn, "h1")
+    eid = record_evaluation(conn, "h1", _result(), "fast")
+    row = conn.execute("SELECT note FROM evaluations WHERE id = ?", (eid,)).fetchone()
+    assert row["note"] is None

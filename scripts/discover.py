@@ -87,6 +87,13 @@ def main() -> int:
              "deferred (see docs/backlog.md). Up to 3 retries on noncompliance, "
              "then the generation is skipped.",
     )
+    parser.add_argument(
+        "--note",
+        default=None,
+        help="Free-text run label stored on the evaluation row (evaluations.note) "
+             "so a run can be selected later — mutation rounds, A/B tests, "
+             "archetype experiments. Not provenance; see migration 005.",
+    )
     args = parser.parse_args()
 
     err = _check_timeframe_archetype_compat(args.archetype, args.timeframe)
@@ -112,6 +119,8 @@ def _run(args, conn) -> int:
     print(f"  Mode      : {'DRY-RUN' if args.dry_run else 'GENERATE+TRANSLATE'}")
     if args.timeframe is not None:
         print(f"  Timeframe : {args.timeframe} (constrained; up to 3 retries on noncompliance)")
+    if args.note is not None:
+        print(f"  Note      : {args.note}")
     if args.evaluate and not args.dry_run:
         print(f"  Evaluate  : {'FAST (NON-CANONICAL)' if args.fast else 'CANONICAL'}")
         if args.fast:
@@ -197,6 +206,7 @@ def _run(args, conn) -> int:
             output_root=_ROOT / "results",
             conn=conn,
             strategy_hash=result.strategy_hash,
+            note=args.note,
         )
         print(f"\n[FAST EVAL — NON-CANONICAL]")
         print(f"  median_pf = {eval_result.median_pf:.3f}")
@@ -223,6 +233,7 @@ def _run(args, conn) -> int:
             output_root=_ROOT / "results",
             conn=conn,
             strategy_hash=result.strategy_hash,
+            note=args.note,
         )
         print(f"\n[CANONICAL EVAL]")
         print(f"  median_pf = {eval_result.breakdown.median_pf:.3f}")

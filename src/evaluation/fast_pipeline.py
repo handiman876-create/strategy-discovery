@@ -101,6 +101,7 @@ def run_fast_evaluation(
     strategy_hash: str | None = None,
     symbols: list[str] | None = None,
     imported_from: str | None = None,
+    note: str | None = None,
 ) -> FastEvaluationResult:
     """Fast/sanity evaluation. Small bootstrap/baseline, no parameter grid.
     Returns FastEvaluationResult.
@@ -121,7 +122,9 @@ def run_fast_evaluation(
     imported_from: provenance marker for the recorded eval row, forwarded to
     record_evaluation. None (the default) means "freshly generated", which is
     correct for the nightly loop. Replay callers pass a marker — see
-    recover_stranded_generations.py."""
+    recover_stranded_generations.py.
+
+    note: free-text run label (`discover.py --note`) stored on the eval row."""
     basket = symbols if symbols is not None else FAST_BASKET
     if walk_config is None:
         walk_config = WalkForwardConfig(
@@ -183,6 +186,7 @@ def run_fast_evaluation(
         strategy_hash=strategy_hash,
         eval_type="fast",
         imported_from=imported_from,
+        note=note,
     )
 
     return fast

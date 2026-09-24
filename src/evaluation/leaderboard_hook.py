@@ -31,6 +31,7 @@ def record_evaluation_to_leaderboard(
     strategy_hash: str | None,
     eval_type: str,
     imported_from: str | None = None,
+    note: str | None = None,
 ) -> None:
     """Persist this evaluation to the leaderboard. Three early exits:
 
@@ -48,6 +49,9 @@ def record_evaluation_to_leaderboard(
     later query can tell a replayed eval from a nightly one. Without it the
     only discriminator is the evaluated_at window, which stops working as
     soon as a replay overlaps a nightly run.
+
+    note is a free-text run label (`discover.py --note`) stored alongside,
+    not in place of, imported_from.
     """
     if conn is None:
         return
@@ -60,7 +64,8 @@ def record_evaluation_to_leaderboard(
     try:
         record = to_evaluation_record(pipeline_result, eval_type=eval_type)
         record_evaluation(
-            conn, strategy_hash, record, eval_type, imported_from=imported_from
+            conn, strategy_hash, record, eval_type,
+            imported_from=imported_from, note=note,
         )
     except Exception as e:
         name = getattr(pipeline_result, "strategy_name", "<unknown>")

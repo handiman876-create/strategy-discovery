@@ -23,6 +23,7 @@ which `continue`s before any evaluation runs, so no backtest or API call happens
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -121,3 +122,60 @@ def test_failure_line_is_printed_for_the_log(ad, monkeypatch, tmp_path, capsys):
     out = capsys.readouterr().out
     assert "FAIL reason=no_generation_no_spend" in out
     assert "outage" in out
+
+
+# ── Run label (--note) ───────────────────────────────────────────────────────
+
+
+def test_default_note_is_autodiscover_utc_date(ad):
+    from datetime import datetime, timezone
+    now = datetime(2026, 9, 24, 7, 0, tzinfo=timezone.utc)
+    assert ad._default_note(now) == "autodiscover_2026-09-24"
+
+
+class _FakeSpec:
+    name = "probe_strat"
+    timeframes = ["1d"]
+
+
+class _FakeGenOK:
+    spec = _FakeSpec()
+    strategy_hash = "a" * 64
+    code_path = "/nonexistent.py"
+    failure_reason = None
+    def __init__(self):
+        self.logs = [_FakeLog(0.01)]
+
+
+def _drive_one_candidate(ad, monkeypatch, tmp_path, argv_extra):
+    seen: dict = {}
+
+    def fake_fast(cls, **kw):
+        seen.update(kw)
+        raise RuntimeError("stop after capture")  # FAST-ERROR path, no scoring needed
+
+    monkeypatch.setattr(ad, "initialize_db", lambda *a, **k: _FakeConn())
+    monkeypatch.setattr(ad, "load_symbol_list", lambda *a, **k: ["SPY"])
+    monkeypatch.setattr(ad, "generate_and_translate", lambda *a, **k: _FakeGenOK())
+    monkeypatch.setattr(ad, "_load_class", lambda *a, **k: object)
+    monkeypatch.setattr(ad, "run_fast_evaluation", fake_fast)
+    summary = tmp_path / "summary.json"
+    monkeypatch.setattr(sys, "argv", [
+        "autodiscover.py", "--n", "1", "--fast-only",
+        "--summary", str(summary), *argv_extra,
+    ])
+    ad.main()
+    return seen, json.loads(summary.read_text())
+
+
+def test_note_defaults_to_dated_label_on_every_eval(ad, monkeypatch, tmp_path):
+    monkeypatch.setattr(ad, "_default_note", lambda now=None: "autodiscover_2026-09-24")
+    seen, summary = _drive_one_candidate(ad, monkeypatch, tmp_path, [])
+    assert seen["note"] == "autodiscover_2026-09-24"
+    assert summary["note"] == "autodiscover_2026-09-24"
+
+
+def test_explicit_note_overrides_default(ad, monkeypatch, tmp_path):
+    seen, summary = _drive_one_candidate(ad, monkeypatch, tmp_path, ["--note", "mutation_r1"])
+    assert seen["note"] == "mutation_r1"
+    assert summary["note"] == "mutation_r1"

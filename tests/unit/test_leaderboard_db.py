@@ -118,3 +118,14 @@ def test_broken_migration_rolls_back_cleanly(tmp_path):
         assert "schema_version" in names
     finally:
         conn.close()
+
+
+def test_migration_005_adds_nullable_note_column(tmp_path):
+    conn = initialize_db(tmp_path / "lb.db")
+    try:
+        cols = {r["name"]: r for r in conn.execute("PRAGMA table_info(evaluations)")}
+        assert "note" in cols
+        assert cols["note"]["type"] == "TEXT"
+        assert cols["note"]["notnull"] == 0
+    finally:
+        conn.close()

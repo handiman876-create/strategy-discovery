@@ -88,6 +88,7 @@ def run_evaluation(
     strategy_factory: Callable[..., Strategy] | None = None,
     conn: Any = None,
     strategy_hash: str | None = None,
+    note: str | None = None,
 ) -> EvaluationResult:
     """Run the full evaluation harness for a strategy across `symbols`.
 
@@ -95,7 +96,9 @@ def run_evaluation(
     strategy's behavioral hash. When both are set, the result is recorded
     via record_evaluation(eval_type='canonical') before returning.
     Failures are logged at WARNING and swallowed — see
-    leaderboard_hook.record_evaluation_to_leaderboard for the policy."""
+    leaderboard_hook.record_evaluation_to_leaderboard for the policy.
+
+    note: free-text run label (`discover.py --note`) stored on the eval row."""
     strategy_factory = strategy_factory or strategy_class
     strategy_name = strategy_class.__name__
 
@@ -173,6 +176,7 @@ def run_evaluation(
         output_root=output_root,
         conn=conn,
         strategy_hash=strategy_hash,
+        note=note,
     )
 
 
@@ -291,6 +295,7 @@ def _finalize(
     output_root: Path | None,
     conn: Any,
     strategy_hash: str | None,
+    note: str | None = None,
 ) -> EvaluationResult:
     """Shared scoring → report → leaderboard-record tail for the walk-forward
     (run_evaluation) and holdout (run_holdout_evaluation) paths. Centralized so
@@ -338,6 +343,7 @@ def _finalize(
         conn=conn,
         strategy_hash=strategy_hash,
         eval_type=eval_type,
+        note=note,
     )
 
     return result

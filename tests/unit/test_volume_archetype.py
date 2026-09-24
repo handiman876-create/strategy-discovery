@@ -242,3 +242,18 @@ def test_other_archetypes_unaffected_by_volume_requirement():
         entry_long=_cmp("rsi_2", "<", 5.0),
     )
     validate_for_translation(spec)
+
+
+def test_discover_cli_accepts_note():
+    """--note was missing on the first volume test run (2026-09-23) and the
+    run label was lost; pin that the flag exists."""
+    import subprocess
+    import sys
+
+    root = Path(__file__).resolve().parents[2]
+    out = subprocess.run(
+        [sys.executable, str(root / "scripts" / "discover.py"), "--help"],
+        capture_output=True, text=True, cwd=root, timeout=120,
+    )
+    assert out.returncode == 0, out.stderr
+    assert "--note" in out.stdout
